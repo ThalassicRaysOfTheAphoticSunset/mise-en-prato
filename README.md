@@ -127,6 +127,32 @@ ingênuo, todos vistos no cupom real que serve de fixture:
 
 É por isso que se usa lxml aqui, e não o `html.parser` da stdlib.
 
+### Foto de celular: o problema é resolução DEMAIS
+
+Contra-intuitivo, e custou dois envios falhos até virar medição. Um iPhone
+entrega 4032x3024; o QR da NFC-e tem ~45 módulos de lado e ocupa boa parte do
+quadro, o que dá uns **40 pixels por módulo**. Só que a impressão térmica é
+chapiscada — o módulo não é um quadrado sólido, é uma nuvem de pontos com
+falhas. Nessa escala o zbar mede o chapisco em vez do módulo e desiste, mesmo
+com a foto bem enquadrada e nítida.
+
+Medido contra a foto real que falhou:
+
+```
+reduzida para 1600, 1200, 900, 700 ......... falhou
+reduzida para 500, 400, 300 ................ achou
+desfoque 4 + reduzida para 1200, 800, 600 .. achou
+filtro de mediana, em qualquer tamanho grande  falhou
+```
+
+Daí a escada de `cupomzinho/qr.py`: uma varredura de escalas, desfocando na
+medida da redução. A foto que falhava passa hoje na segunda tentativa, em ~1 s.
+
+Duas hipóteses foram levantadas e **medidas como falsas** no caminho, e ficam
+registradas para ninguém as perseguir de novo: falta de zona de silêncio (o
+zbar lê QR sem margem nenhuma) e filtro de mediana para matar o chapisco (não
+recupera em resolução alta).
+
 **O cupom não traz código de barras nem NCM.** Traz a descrição e um código
 interno da loja. Daí o casamento de produto em três degraus (`cupomzinho/cupons.py`):
 

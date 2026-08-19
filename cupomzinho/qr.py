@@ -4,68 +4,91 @@
 Quem decodifica é o servidor, e não o navegador, porque o Safari do iPhone não
 tem `BarcodeDetector` — depender dele deixaria metade da casa de fora.
 
-O pyzbar sozinho é exigente demais para foto de cupom no mundo real: o papel é
-térmico e de baixo contraste, a foto sai de 4000 px torta pelo EXIF, e o QR
-costuma ocupar um pedaço pequeno do quadro. Então aqui não há uma tentativa, há
-uma escada de tentativas, da mais barata para a mais cara, parando na primeira
-que achar alguma coisa.
+O pyzbar sozinho não dá conta de foto de cupom no mundo real, e o motivo é o
+contrário do que a intuição diz: **sobra resolução**. Um iPhone entrega
+4032x3024; o QR da NFC-e ocupa boa parte do quadro e tem ~45 módulos de lado,
+o que dá uns 40 pixels POR MÓDULO. Só que a impressão térmica é chapiscada —
+o módulo não é um quadrado sólido, é uma nuvem de pontos com falhas. Nessa
+escala o zbar mede o chapisco em vez do módulo, e desiste.
+
+Medido contra a foto real que falhou (3024x4032, cupom térmico gasto):
+
+    reduzida para 1600, 1200, 900, 700 ......... falhou
+    reduzida para 500, 400, 300 ................ achou
+    desfoque 4 + reduzida para 1200, 800, 600 .. achou
+    mediana, em qualquer tamanho grande ........ falhou
+
+Ou seja: o conserto é reduzir, e desfocar ANTES de reduzir amplia muito a
+margem — o desfoque dissolve o chapisco antes que a redução o transforme em
+ruído. É o que a escada abaixo faz, varrendo escalas da maior para a menor.
 """
 import logging
 from io import BytesIO
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 from pyzbar.pyzbar import ZBarSymbol, decode
 
 log = logging.getLogger("cupomzinho.qr")
 
-# Acima disto o zbar fica lento sem ficar melhor; abaixo, o QR some no ruído.
-LADO_BOM = 1600
+# A varredura de escalas, em pixels do lado maior. Começa perto do original
+# (foto já boa passa na primeira) e desce até o tamanho em que um QR de 45
+# módulos ainda tem uns 7 pixels por módulo — abaixo disso não há o que ler.
+ESCALAS = (1600, 1100, 800, 600, 450, 320)
 
-# A norma pede 4 módulos de branco em volta do código. MEDIDO: o zbar lê sem
-# essa margem numa imagem limpa, então a falta dela não é, sozinha, motivo de
-# falha. As tentativas "com margem" ficam como seguro barato para o caso de o
-# código encostar num fundo escuro — não como conserto de um defeito conhecido.
+# Margem branca em volta, para o caso de o código encostar num fundo escuro.
+# MEDIDO: o zbar lê QR sem zona de silêncio numa imagem limpa, então isto é
+# seguro barato, não conserto de defeito conhecido.
 MARGEM = 40
 
 
-def _com_margem(imagem: Image.Image) -> Image.Image:
-    """Devolve a zona de silêncio que o enquadramento comeu."""
-    return ImageOps.expand(imagem, border=MARGEM, fill=255)
+def _reduzir(imagem: Image.Image, lado: int) -> Image.Image | None:
+    """Reduz para `lado`, desfocando na medida da redução.
+
+    O raio cresce junto com o fator: reduzir 4x sem filtrar antes é o mesmo que
+    amostrar o chapisco em vez da média dele. É anti-serrilhado com um pouco de
+    folga a mais, de propósito.
+    """
+    fator = lado / max(imagem.size)
+    if fator >= 1:
+        return None
+    raio = max(1.0, 0.9 / fator)
+    suave = imagem.filter(ImageFilter.GaussianBlur(raio))
+    return suave.resize(
+        (max(1, round(imagem.width * fator)), max(1, round(imagem.height * fator))),
+        Image.LANCZOS)
 
 
 def _tentativas(imagem: Image.Image):
-    """As variações da imagem, em ordem de custo. Cada uma é um palpite sobre
-    por que a anterior falhou."""
-    # 1. como veio, só endireitada e em cinza — resolve a maioria
+    """As variações, da mais barata e provável para a mais desesperada."""
     base = ImageOps.exif_transpose(imagem).convert("L")
+
+    # 1. como veio. Foto já pequena, ou captura de tela, passa aqui.
     yield "cinza", base
 
-    # 2. foto grande demais: reduzir tira o ruído do sensor e o zbar respira
-    maior = max(base.size)
-    if maior > LADO_BOM:
-        fator = LADO_BOM / maior
-        yield "reduzida", base.resize(
-            (int(base.width * fator), int(base.height * fator)), Image.LANCZOS)
+    # 2. a varredura de escalas — é esta que resolve foto de celular.
+    reduzidas = []
+    for lado in ESCALAS:
+        menor = _reduzir(base, lado)
+        if menor is not None:
+            reduzidas.append((lado, menor))
+            yield f"reduzida {lado}", menor
 
-    # 3. cupom térmico é cinza sobre cinza: esticar o contraste separa o código
-    yield "contraste", ImageOps.autocontrast(base, cutoff=2)
+    # 3. contraste esticado: cupom térmico velho é cinza sobre cinza.
+    for lado, menor in reduzidas[:3] or [(0, base)]:
+        yield f"contraste {lado}", ImageOps.autocontrast(menor, cutoff=2)
 
-    # 4. QR pequeno no quadro: ampliar dá pixels para o zbar medir os módulos
-    if maior < LADO_BOM * 2:
+    # 4. preto no branco, sem meio-termo.
+    for lado, menor in reduzidas[:3] or [(0, base)]:
+        yield f"binarizada {lado}", ImageOps.autocontrast(menor, cutoff=2).point(
+            lambda p: 255 if p > 128 else 0)
+
+    # 5. ampliar, para o caso oposto: QR pequenininho num quadro grande.
+    if max(base.size) < 1200:
         yield "ampliada", base.resize((base.width * 2, base.height * 2), Image.LANCZOS)
 
-    # 5. preto no branco, sem meio-termo
-    binarizada = ImageOps.autocontrast(base, cutoff=2).point(lambda p: 255 if p > 128 else 0)
-    yield "binarizada", binarizada
-
-    # 6. as mesmas, agora com a zona de silêncio devolvida. Vem por último não
-    # por ser improvável — é o caso de quem mira bem —, mas porque as anteriores
-    # são mais baratas e cobrem a foto folgada, que é a maioria.
-    yield "com margem", _com_margem(base)
-    yield "com margem e contraste", _com_margem(ImageOps.autocontrast(base, cutoff=2))
-    yield "com margem, ampliada", _com_margem(
-        base.resize((base.width * 2, base.height * 2), Image.LANCZOS))
-    yield "com margem, binarizada", _com_margem(binarizada)
+    # 6. com a margem branca devolvida.
+    alvo = reduzidas[2][1] if len(reduzidas) > 2 else base
+    yield "com margem", ImageOps.expand(alvo, border=MARGEM, fill=255)
 
 
 def ler_qr(dados: bytes) -> list[str]:
