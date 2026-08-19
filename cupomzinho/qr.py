@@ -21,6 +21,17 @@ log = logging.getLogger("cupomzinho.qr")
 # Acima disto o zbar fica lento sem ficar melhor; abaixo, o QR some no ruído.
 LADO_BOM = 1600
 
+# A norma pede 4 módulos de branco em volta do código. MEDIDO: o zbar lê sem
+# essa margem numa imagem limpa, então a falta dela não é, sozinha, motivo de
+# falha. As tentativas "com margem" ficam como seguro barato para o caso de o
+# código encostar num fundo escuro — não como conserto de um defeito conhecido.
+MARGEM = 40
+
+
+def _com_margem(imagem: Image.Image) -> Image.Image:
+    """Devolve a zona de silêncio que o enquadramento comeu."""
+    return ImageOps.expand(imagem, border=MARGEM, fill=255)
+
 
 def _tentativas(imagem: Image.Image):
     """As variações da imagem, em ordem de custo. Cada uma é um palpite sobre
@@ -43,8 +54,18 @@ def _tentativas(imagem: Image.Image):
     if maior < LADO_BOM * 2:
         yield "ampliada", base.resize((base.width * 2, base.height * 2), Image.LANCZOS)
 
-    # 5. último recurso: preto no branco, sem meio-termo
-    yield "binarizada", ImageOps.autocontrast(base, cutoff=2).point(lambda p: 255 if p > 128 else 0)
+    # 5. preto no branco, sem meio-termo
+    binarizada = ImageOps.autocontrast(base, cutoff=2).point(lambda p: 255 if p > 128 else 0)
+    yield "binarizada", binarizada
+
+    # 6. as mesmas, agora com a zona de silêncio devolvida. Vem por último não
+    # por ser improvável — é o caso de quem mira bem —, mas porque as anteriores
+    # são mais baratas e cobrem a foto folgada, que é a maioria.
+    yield "com margem", _com_margem(base)
+    yield "com margem e contraste", _com_margem(ImageOps.autocontrast(base, cutoff=2))
+    yield "com margem, ampliada", _com_margem(
+        base.resize((base.width * 2, base.height * 2), Image.LANCZOS))
+    yield "com margem, binarizada", _com_margem(binarizada)
 
 
 def ler_qr(dados: bytes) -> list[str]:

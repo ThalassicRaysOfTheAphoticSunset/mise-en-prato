@@ -66,3 +66,25 @@ def test_bytes_que_nao_sao_imagem():
 
 def test_png_tambem_serve():
     assert ler_qr(_bytes(_qr(), "PNG")) == [URL_QR]
+
+
+def test_qr_sem_zona_de_silencio():
+    """QR colado na borda da imagem, sem a margem branca que a norma pede.
+
+    MEDIDO: o zbar lê isto sem reclamar, então a falta de margem NÃO é motivo
+    de falha — a suspeita foi levantada e descartada. O teste fica como
+    regressão barata, e as tentativas "com margem" da escada ficam como seguro
+    para o caso de fundo escuro colado no código, não como o conserto de nada.
+    """
+    codigo = qrcode.QRCode(box_size=8, border=0)
+    codigo.add_data(URL_QR)
+    imagem = codigo.make_image(fill_color="black", back_color="white").convert("RGB")
+    assert ler_qr(_bytes(imagem)) == [URL_QR]
+
+
+def test_qr_sem_margem_e_com_pouco_contraste():
+    """Sem margem e cinza sobre cinza — o cupom térmico fotografado de perto."""
+    codigo = qrcode.QRCode(box_size=8, border=0)
+    codigo.add_data(URL_QR)
+    imagem = codigo.make_image(fill_color="black", back_color="white").convert("L")
+    assert ler_qr(_bytes(imagem.point(lambda p: 100 + p // 3))) == [URL_QR]

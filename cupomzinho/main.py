@@ -9,8 +9,11 @@ que chega já passou pelo Tailscale — falta apenas perguntar ao tailscaled que
 """
 import asyncio
 import json
+import logging
 import sqlite3
+import sys
 from contextlib import asynccontextmanager
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
@@ -28,6 +31,7 @@ from .nfce_pr import buscar, chave_da_url, interpretar
 from .qr import ler_qr
 
 WEB = Path(__file__).parent / "web"
+log = logging.getLogger("cupomzinho.main")
 
 
 class Codificador(json.JSONEncoder):
@@ -46,6 +50,16 @@ class RespostaJSON(JSONResponse):
         return json.dumps(content, cls=Codificador, ensure_ascii=False).encode("utf-8")
 
 
+def _guardar_falha(bruto: bytes, nome: str) -> Path:
+    """Guarda a imagem que não deu QR, para virar caso de teste."""
+    pasta = config().dados / "falhas"
+    pasta.mkdir(parents=True, exist_ok=True)
+    sufixo = Path(nome).suffix or ".bin"
+    alvo = pasta / f"{datetime.now():%Y-%m-%d_%H%M%S}{sufixo}"
+    alvo.write_bytes(bruto)
+    return alvo
+
+
 def responder(dados) -> RespostaJSON:
     """Devolve a resposta JÁ SERIALIZADA, e é de propósito.
 
@@ -57,9 +71,28 @@ def responder(dados) -> RespostaJSON:
     return RespostaJSON(dados)
 
 
+def configurar_log() -> None:
+    """Faz o log da app aparecer no `docker logs`.
+
+    O uvicorn monta a configuração de log dele e não adota logger de terceiros,
+    então sem isto todo `log.info` da app some — e some justamente na hora de
+    diagnosticar, que foi o que aconteceu com a primeira foto que falhou.
+    """
+    log = logging.getLogger("cupomzinho")
+    if log.handlers:
+        return
+    saida = logging.StreamHandler(sys.stdout)
+    saida.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s",
+                                         "%H:%M:%S"))
+    log.addHandler(saida)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+
 @asynccontextmanager
 async def ciclo_de_vida(app: FastAPI):
     cfg = config()
+    configurar_log()
     cfg.pasta_cupons.mkdir(parents=True, exist_ok=True)
     cfg.pasta_backups.mkdir(parents=True, exist_ok=True)
     app.state.con = conectar(cfg.banco)
@@ -153,14 +186,21 @@ async def enviar_foto(quem: Morador, con: Banco, foto: Annotated[UploadFile, Fil
     É isto que faz o iPhone funcionar: o Safari não tem BarcodeDetector, então
     depender do navegador deixaria metade da casa de fora.
     """
+    bruto = await foto.read()
     try:
-        achados = ler_qr(await foto.read())
+        achados = ler_qr(bruto)
     except ValueError as erro:
+        _guardar_falha(bruto, foto.filename or "foto")
         raise HTTPException(400, str(erro)) from erro
 
     for conteudo in achados:
         if chave_da_url(conteudo):
             return responder(_registrar(con, conteudo, quem, "foto"))
+
+    # A foto que não deu certo fica guardada. Consertar leitor de código de
+    # barras sem o arquivo que falhou é adivinhação; com ele, é teste.
+    guardada = _guardar_falha(bruto, foto.filename or "foto")
+    log.warning("QR não encontrado; foto guardada em %s", guardada)
 
     if achados:
         # Achou QR, mas não era de cupom — o cupom tem outros códigos impressos.
@@ -168,8 +208,8 @@ async def enviar_foto(quem: Morador, con: Banco, foto: Annotated[UploadFile, Fil
             422, "achei um código nessa foto, mas não é o QR da nota fiscal. "
                  "O certo é o quadradinho embaixo, perto da chave de acesso.")
     raise HTTPException(
-        422, "não achei nenhum QR Code nessa foto. Chegue mais perto, deixe o "
-             "quadradinho preencher a tela e evite sombra em cima dele.")
+        422, "não achei nenhum QR Code nessa foto. A foto ficou guardada no "
+             "servidor para eu descobrir por quê — tente também colar o link.")
 
 
 # ── consulta ─────────────────────────────────────────────────────────────────
