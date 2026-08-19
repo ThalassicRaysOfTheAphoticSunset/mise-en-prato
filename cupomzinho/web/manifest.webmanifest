@@ -1,0 +1,13 @@
+{
+  "name": "cupomzinho",
+  "short_name": "cupomzinho",
+  "description": "Cupom fiscal, gasto de mercado e caça a preço",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111512",
+  "theme_color": "#111512",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "/icone.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

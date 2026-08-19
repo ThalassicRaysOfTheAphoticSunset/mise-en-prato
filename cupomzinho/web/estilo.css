@@ -1,0 +1,96 @@
+/* Tema único, escuro por padrão e claro quando o aparelho pede. Nada de CDN e
+   nada de fonte remota: a CSP é fechada e a app precisa abrir sem internet. */
+:root {
+  --fundo: #f6f7f5;  --painel: #fff;      --borda: #e2e6df;
+  --tinta: #1a1e1b;  --fraca: #667065;    --verde: #1b7f4b;
+  --alerta: #9a3412;  --realce: #eef4ee;
+  --sombra: 0 1px 2px rgba(0,0,0,.06), 0 4px 12px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fundo: #111512;  --painel: #191e1a;  --borda: #2b322c;
+    --tinta: #e8ece7;  --fraca: #93a094;   --verde: #4ade80;
+    --alerta: #fca5a5;  --realce: #1f2a22;
+    --sombra: none;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--fundo); color: var(--tinta);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+header {
+  display: flex; align-items: baseline; gap: .6rem;
+  padding: max(.9rem, env(safe-area-inset-top)) 1rem .6rem;
+}
+h1 { font-size: 1.15rem; margin: 0; letter-spacing: -.01em; }
+.quem { color: var(--fraca); font-size: .82rem; margin-left: auto; }
+h2 { font-size: .82rem; text-transform: uppercase; letter-spacing: .06em;
+     color: var(--fraca); margin: 1.6rem 0 .5rem; }
+
+nav { display: flex; gap: .25rem; padding: 0 1rem; border-bottom: 1px solid var(--borda); }
+nav button {
+  flex: 1; padding: .6rem .2rem; border: 0; background: none; color: var(--fraca);
+  font: inherit; font-size: .9rem; cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+nav button.ativa { color: var(--tinta); border-bottom-color: var(--verde); font-weight: 600; }
+
+main { padding: 1rem; max-width: 46rem; margin: 0 auto; }
+
+.botao-grande {
+  display: flex; flex-direction: column; align-items: center; gap: .5rem;
+  padding: 1.7rem 1rem; border: 1px dashed var(--borda); border-radius: 14px;
+  background: var(--painel); color: var(--verde); font-weight: 600; cursor: pointer;
+}
+.botao-grande svg { width: 34px; height: 34px; }
+.alternativa { margin-top: .9rem; }
+.alternativa summary { color: var(--fraca); font-size: .9rem; cursor: pointer; }
+.dica { color: var(--fraca); font-size: .84rem; }
+#form-link { display: flex; gap: .4rem; }
+input[type=url], input[type=search] {
+  flex: 1; width: 100%; padding: .6rem .7rem; border: 1px solid var(--borda);
+  border-radius: 10px; background: var(--painel); color: var(--tinta); font: inherit;
+}
+button[type=submit], .acao {
+  padding: .6rem .9rem; border: 0; border-radius: 10px;
+  background: var(--verde); color: #06110a; font: inherit; font-weight: 600; cursor: pointer;
+}
+@media (prefers-color-scheme: dark) { button[type=submit], .acao { color: #06110a; } }
+
+.estado { margin: .9rem 0; padding: .7rem .9rem; border-radius: 10px;
+          background: var(--realce); font-size: .92rem; }
+.estado.ruim { background: transparent; border: 1px solid var(--alerta); color: var(--alerta); }
+
+.cartao { background: var(--painel); border: 1px solid var(--borda);
+          border-radius: 14px; padding: .9rem 1rem; box-shadow: var(--sombra); }
+.lista { display: flex; flex-direction: column; gap: .5rem; }
+.lista > * { background: var(--painel); border: 1px solid var(--borda);
+             border-radius: 12px; padding: .7rem .9rem; }
+.linha { display: flex; justify-content: space-between; gap: .8rem; align-items: baseline; }
+.linha + .linha { margin-top: .35rem; }
+.fraca { color: var(--fraca); font-size: .84rem; }
+.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.clicavel { cursor: pointer; }
+.selo { font-size: .72rem; padding: .1rem .45rem; border-radius: 999px;
+        background: var(--realce); color: var(--fraca); }
+.selo.aviso { color: var(--alerta); border: 1px solid var(--alerta); background: transparent; }
+
+.grande { font-size: 2rem; font-weight: 650; letter-spacing: -.02em; }
+.sobe { color: var(--alerta); } .desce { color: var(--verde); }
+
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+td { padding: .3rem 0; vertical-align: top; }
+td.num { text-align: right; }
+
+.barra { display: grid; grid-template-columns: 1fr auto; gap: .2rem .8rem;
+         align-items: center; margin-bottom: .45rem; }
+.barra .trilho { grid-column: 1 / -1; height: 6px; background: var(--borda);
+                 border-radius: 999px; overflow: hidden; }
+.barra .preenchida { height: 100%; background: var(--verde); border-radius: 999px; }
+
+svg.grafico { width: 100%; height: 150px; display: block; overflow: visible; }
+svg.grafico rect { fill: var(--verde); }
+svg.grafico rect.apagada { fill: var(--borda); }
+svg.grafico text { fill: var(--fraca); font-size: 10px; }

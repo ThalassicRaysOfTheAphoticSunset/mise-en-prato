@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111512">
+<title>cupomzinho</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/estilo.css">
+<link rel="icon" href="/icone.svg" type="image/svg+xml">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="cupomzinho">
+</head>
+<body>
+<header>
+  <h1>cupomzinho</h1>
+  <span id="quem" class="quem"></span>
+</header>
+
+<nav id="abas">
+  <button data-aba="enviar" class="ativa">Enviar</button>
+  <button data-aba="gastos">Gastos</button>
+  <button data-aba="produtos">Produtos</button>
+</nav>
+
+<main>
+  <!-- ── enviar ─────────────────────────────────────────────────────────── -->
+  <section id="aba-enviar">
+    <label class="botao-grande" for="foto">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l2-2h6l2 2h3v12H4z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="13" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      Fotografar o QR do cupom
+    </label>
+    <input id="foto" type="file" accept="image/*" capture="environment" hidden>
+
+    <details class="alternativa">
+      <summary>ou colar o link do cupom</summary>
+      <p class="dica">No iPhone: aponte o app Câmera para o QR, toque na
+        notificação, copie o endereço e cole aqui.</p>
+      <form id="form-link">
+        <input id="link" type="url" inputmode="url" placeholder="https://www.fazenda.pr.gov.br/nfce/qrcode?p=…" required>
+        <button type="submit">Registrar</button>
+      </form>
+    </details>
+
+    <div id="envio-estado" class="estado" hidden></div>
+    <div id="cupom-lido"></div>
+
+    <h2>Últimos cupons</h2>
+    <div id="revisao"></div>
+    <div id="lista-cupons" class="lista"></div>
+  </section>
+
+  <!-- ── gastos ─────────────────────────────────────────────────────────── -->
+  <section id="aba-gastos" hidden>
+    <div id="gastos-topo"></div>
+    <h2>Por mês</h2>
+    <div id="grafico-meses"></div>
+    <h2>Por mercado</h2>
+    <div id="por-loja"></div>
+    <h2>Por morador</h2>
+    <div id="por-morador"></div>
+    <h2>Maiores gastos do mês</h2>
+    <div id="maiores"></div>
+  </section>
+
+  <!-- ── produtos ───────────────────────────────────────────────────────── -->
+  <section id="aba-produtos" hidden>
+    <input id="busca" type="search" placeholder="buscar produto…" autocomplete="off">
+    <div id="lista-produtos" class="lista"></div>
+    <div id="produto-detalhe"></div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+services:
+  # O cupomzinho: cupom fiscal da casa, gasto de mercado e caça a preço.
+  #
+  # App separada, com repositório próprio e privado no GitHub. Mora dentro de
+  # ~/srv só para o Dockge enxergar o stack — o histórico dela é dela, e o
+  # .gitignore do casa-srv ignora esta pasta inteira.
+  cupomzinho:
+    # `build` e não `image`: esta é a única stack da casa com dependências
+    # próprias. Elas moram na imagem, e é por isso que o host segue sem nada
+    # instalado. Mesmo arranjo do dragonwilds.
+    build:
+      context: .
+      target: producao
+    container_name: cupomzinho
+    restart: unless-stopped
+    # uid 1000 = miguel, o dono de /mnt/data. O contêiner escreve o banco.
+    user: "1000:1000"
+    ports:
+      # Bind no IP da tailnet, não em 0.0.0.0: isto é o extrato de mercado da
+      # casa, e visita no Wi-Fi de casa é LAN, não é morador (mesma decisão do
+      # painel). Preço a pagar, igual ao de lá: se o tailscaled não estiver de
+      # pé, o bind falha e o contêiner só sobe na volta do `restart`. Se o IP
+      # da tailnet mudar, é esta linha.
+      - 100.122.128.48:8090:8090
+    environment:
+      - TZ=America/Sao_Paulo
+      - PYTHONUNBUFFERED=1 # senão o log do contêiner só aparece em blocos
+      - DADOS=/dados
+      # LOCAL é o centro da busca no Menor Preço, "lat,lon" — Medianeira.
+      - LOCAL=${LOCAL:--25.2947,-54.0940}
+      - RAIO_KM=${RAIO_KM:-15}
+      # Teto baixo de propósito: ~30 consultas em 25 minutos foram suficientes
+      # para a API do estado começar a devolver dado FABRICADO com HTTP 200.
+      # Ver o detector em cupomzinho/sanidade.py e o README.
+      - TETO_CONSULTAS_HORA=${TETO_CONSULTAS_HORA:-20}
+      - MORADORES=${MORADORES}
+    volumes:
+      # O banco, o HTML cru de cada cupom e os backups.
+      - /mnt/data/cupomzinho:/dados
+      # O socket do tailscaled é 0666: dá o `whois` do IP de origem sem CLI e
+      # sem privilégio. É assim que a app sabe quem está enviando o cupom, sem
+      # inventar mais uma senha para a casa decorar.
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock:ro
+      - /etc/localtime:/etc/localtime:ro
+networks: {}

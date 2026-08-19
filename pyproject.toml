@@ -14,6 +14,7 @@ dependencies = [
     "beautifulsoup4>=4.13",
     "lxml>=5.3",
     "pydantic-settings>=2.7",
+    "python-multipart>=0.0.20",  # o FastAPI exige para receber a foto do QR
     "pyzbar>=0.1.9",
     "pillow>=11",
 ]
