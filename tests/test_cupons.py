@@ -115,3 +115,26 @@ def test_recentes_e_existe(con, cupom):
     assert existe(con, cupom.chave) is True
     lista = recentes(con)
     assert len(lista) == 1 and lista[0]["itens"] == 16 and lista[0]["morador"] == "Miguel"
+
+
+def test_backup_e_poda(con, cupom, tmp_path):
+    """VACUUM INTO gera um banco íntegro, e só se guarda os últimos 7."""
+    import sqlite3
+
+    from cupomzinho.tarefas import fazer_backup
+
+    gravar(con, cupom, morador="Miguel")
+    pasta = tmp_path / "backups"
+
+    alvo = fazer_backup(con, pasta)
+    assert alvo is not None and alvo.exists()
+    assert fazer_backup(con, pasta) is None          # já tem o de hoje
+
+    copia = sqlite3.connect(alvo)
+    assert copia.execute("SELECT COUNT(*) FROM item").fetchone()[0] == 16
+    copia.close()
+
+    for dia in range(1, 11):                          # dez cópias falsas, antigas
+        (pasta / f"cupomzinho_2026-01-{dia:02d}.db").write_bytes(b"")
+    fazer_backup(con, pasta, guardar=7)
+    assert len(list(pasta.glob("cupomzinho_*.db"))) == 7

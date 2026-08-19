@@ -7,6 +7,7 @@ Escuta só no IP da tailnet (quem publica a porta é o compose), então todo mun
 que chega já passou pelo Tailscale — falta apenas perguntar ao tailscaled quem
 é. Ver identidade.py.
 """
+import asyncio
 import json
 import sqlite3
 from contextlib import asynccontextmanager
@@ -19,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import cupons, relatorios
+from . import cupons, relatorios, tarefas
 from .banco import conectar
 from .config import config
 from .identidade import NaoIdentificado, quem_e
@@ -61,7 +62,13 @@ async def ciclo_de_vida(app: FastAPI):
     cfg.pasta_cupons.mkdir(parents=True, exist_ok=True)
     cfg.pasta_backups.mkdir(parents=True, exist_ok=True)
     app.state.con = conectar(cfg.banco)
+    # O backup vive no ciclo de vida do servidor: sobe junto, desce junto.
+    app.state.tarefas = [
+        asyncio.create_task(tarefas.laco_de_backup(app.state.con, cfg.pasta_backups)),
+    ]
     yield
+    for tarefa in app.state.tarefas:
+        tarefa.cancel()
     app.state.con.close()
 
 
