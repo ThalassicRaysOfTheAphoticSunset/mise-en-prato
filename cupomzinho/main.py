@@ -25,6 +25,7 @@ from .banco import conectar
 from .config import config
 from .identidade import NaoIdentificado, quem_e
 from .nfce_pr import buscar, chave_da_url, interpretar
+from .qr import ler_qr
 
 WEB = Path(__file__).parent / "web"
 
@@ -152,22 +153,23 @@ async def enviar_foto(quem: Morador, con: Banco, foto: Annotated[UploadFile, Fil
     É isto que faz o iPhone funcionar: o Safari não tem BarcodeDetector, então
     depender do navegador deixaria metade da casa de fora.
     """
-    from io import BytesIO
-
-    from PIL import Image
-    from pyzbar.pyzbar import decode
-
     try:
-        imagem = Image.open(BytesIO(await foto.read()))
-    except Exception as erro:
-        raise HTTPException(400, f"não consegui abrir a imagem: {erro}") from erro
+        achados = ler_qr(await foto.read())
+    except ValueError as erro:
+        raise HTTPException(400, str(erro)) from erro
 
-    achados = [c.data.decode("utf-8", "replace") for c in decode(imagem)]
     for conteudo in achados:
         if chave_da_url(conteudo):
             return responder(_registrar(con, conteudo, quem, "foto"))
+
+    if achados:
+        # Achou QR, mas não era de cupom — o cupom tem outros códigos impressos.
+        raise HTTPException(
+            422, "achei um código nessa foto, mas não é o QR da nota fiscal. "
+                 "O certo é o quadradinho embaixo, perto da chave de acesso.")
     raise HTTPException(
-        422, "não achei um QR Code de NFC-e nessa foto — tente enquadrar só o quadradinho")
+        422, "não achei nenhum QR Code nessa foto. Chegue mais perto, deixe o "
+             "quadradinho preencher a tela e evite sombra em cima dele.")
 
 
 # ── consulta ─────────────────────────────────────────────────────────────────

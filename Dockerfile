@@ -21,7 +21,9 @@ RUN pip install --no-cache-dir .
 # É aqui que os testes rodam. O host não tem python3-venv nem pip, então o
 # contêiner é o ambiente de desenvolvimento, não só o de produção.
 FROM base AS dev
-RUN pip install --no-cache-dir pytest pytest-asyncio ruff
+# Lê o extra [dev] do pyproject em vez de repetir a lista aqui: manter as duas
+# em sincronia na mão já custou um "ModuleNotFoundError" que não era do código.
+RUN pip install --no-cache-dir ".[dev]"
 CMD ["pytest", "-q"]
 
 # ── produção ─────────────────────────────────────────────────────────────────
