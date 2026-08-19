@@ -78,71 +78,57 @@ primária, e reenvio é o caso comum, não a exceção.
 
 ---
 
-## A API do Menor Preço mente quando acha que está sendo raspada
+## Sobre a API do Menor Preço: consulta automatizada está fora
 
-Isto é o que mais importa saber antes de mexer neste repositório.
+**Esta é a seção mais importante do repositório.** O `cupomzinho` **não**
+consulta a API do Menor Preço, e a decisão não é técnica.
 
-A API é pública, sem chave, e responde bem. Mas depois de **~30 consultas em 25
-minutos** ela para de dizer a verdade — **sem nunca devolver erro**. Continua
-respondendo HTTP 200, com o JSON no formato certo, e conteúdo fabricado.
+O Termo de Uso da plataforma (CELEPAR, disponível em
+`menorpreco.notaparana.pr.gov.br/termo`) proíbe expressamente:
 
-Medido em 19/08/2026, com estas duas provas:
+> "Você se compromete a não utilizar qualquer sistema automatizado, inclusive,
+> mas sem se limitar a 'robôs', 'spiders' ou 'agentes automatizados', que
+> acessem a Plataforma de maneira a efetuar diversas solicitações aos
+> servidores da CELEPAR em um dado período de tempo, que seja considerado
+> humanamente impossível de ser realizado no mesmo período por meio de um
+> navegador convencional ou de um aplicativo."
 
-```
-termo="ZZQQXX FOOBAR 999G"     (termo que não existe em produto nenhum)
-  -> total=439, e 439 "produtos" com desc EXATAMENTE "ZZQQXX FOOBAR 999G",
-     preços aleatórios, lojas "TOCE MANIA", "CONDOR SUVER CENTZR LTDA"
+> "É vedada também a utilização da Plataforma para aplicações de 'Pricing', ou
+> verificação de preços da concorrência e a utilização abusiva da Plataforma."
 
-gtin=7891167011779             (40 minutos antes: o atum certo, no LAR, R$ 10,97)
-  -> total=419, desc "PASEA DE GENTE COLOAT", município "CAYOEINO DE IVAPEQIRIK"
-```
+> "Coletamos seu IP para fins de controle de acesso e evitar o uso de robôs."
 
-### O que é observação e o que é palpite
+> "A qualquer momento a CELEPAR poderá [...] bloquear, parcial ou
+> definitivamente, a utilização do aplicativo pelo Usuário, seja impedindo o
+> acesso por IP, ASN, CPF, conta do Google ou Facebook."
 
-**Observado**, e reproduzível: HTTP 200, JSON no formato certo, conteúdo falso.
-A `desc` ecoa o termo consultado. Nomes de loja e de município são substituições
-de caractere em nomes reais (`CONDOR SUVER CENTZR LTDA`, `CAMPO VAGRA` por
-Campo Largo, `REWIFE` por Recife). Pedindo raio de 15 km em Medianeira vieram
-estabelecimentos em **ES e PE**. O `ncm` volta com **9 dígitos**, e NCM tem 8.
-Os preços são implausíveis para o produto. As distâncias, essas, são coerentes
-com o raio pedido — o disfarce é cuidadoso nesse campo.
+### O que foi observado, e por quê
 
-**Não observado: a causa.** Três hipóteses, em ordem do que o material sustenta:
+Durante a construção, ~30 consultas em 25 minutos fizeram a API passar a
+responder **HTTP 200 com conteúdo fabricado**: `desc` ecoando o termo
+consultado, nomes de loja e município com caracteres trocados (`CAMPO VAGRA`
+por Campo Largo, `REWIFE` por Recife), `ncm` com 9 dígitos em vez de 8, e
+estabelecimentos em ES e PE dentro de um raio de 15 km em Medianeira. A
+distância, essa, vem coerente com o raio pedido.
 
-1. **base de homologação servida no lugar da de produção** quando a requisição
-   é recusada — a substituição de caractere em nomes reais é a assinatura
-   clássica de um anonimizador de dados de teste, e explica junto o NCM
-   malformado e as UFs de outros estados;
-2. **backend degradado** — cache ou índice caindo num modo de fallback;
-3. **tarpit deliberado contra raspagem** — possível, mas é a que o material
-   menos sustenta: um fisco estadual devolvendo preço falso enganaria também o
-   app oficial, e um tarpit bem-feito devolveria preços plausíveis em vez de
-   nomes embaralhados que qualquer validação pega.
+Levantei três hipóteses para a causa e errei duas vezes: primeiro afirmei
+"anti-raspagem" sem base, depois rebaixei essa hipótese por achar que uma base
+de homologação explicava melhor. O Termo de Uso resolveu a questão — a
+plataforma declara que detecta e barra acesso automatizado. O comportamento é a
+reação anunciada, não um defeito.
 
-Para esta app o efeito é o mesmo nas três, então o que importa é validar. Mas
-**a causa não está estabelecida** — não escreva por aí que é anti-raspagem.
+A fixture `tests/fixtures/menor_preco_envenenado_gtin.json` guarda uma dessas
+respostas, como registro do que foi observado.
 
-Por isso:
+### O que se faz no lugar
 
-- toda resposta passa por `cupomzinho/sanidade.py` **antes** de virar linha no
-  banco. Resposta suspeita não grava nada, entra em backoff longo e sai no log.
-  Os sinais que se mostraram confiáveis, do mais barato ao mais caro:
-  **canário** (uma consulta com termo inventado antes de cada lote — se ela
-  devolver produtos, o lote inteiro é descartado), `uf` diferente de `PR`,
-  `ncm` que não tenha 8 dígitos, `desc` idêntica em todos os resultados vindos
-  de lojas diferentes, e eco literal do termo consultado. A distância **não**
-  serve: ela vem coerente com o raio pedido mesmo na resposta falsa;
-- `TETO_CONSULTAS_HORA` começa baixo e não deve ser aumentado sem medir de novo;
-- o casamento de produto **nunca** é aproximado. No mesmo cupom convivem
-  `ATUM ... RALADO NAT 170G` e `ATUM ... RALADO DEF 170G`, com código de barras
-  diferente e **exatamente o mesmo preço**. Um fuzzy match pegaria o errado sem
-  fazer barulho.
+Comparação de preço entre mercados sai do **histórico da própria casa** — os
+cupons que entram por aqui. É menos abrangente que a base do estado e cobre só
+o que a casa realmente compra, mas é dado próprio, sem depender de ninguém.
 
-Outros limites medidos: a janela `data=` satura em ~7 dias, e `data=30` pendura
-a conexão. A API **não devolve CNPJ** — o estabelecimento vem com um código
-opaco, e o pareamento com a loja do cupom é por nome + município.
-
----
+Para consultar a região, use o site ou o app oficial, na mão. Se um dia a
+comparação automática valer o esforço, o caminho é pedir acesso autorizado à
+CELEPAR — não contornar o bloqueio.
 
 ## O que o cupom traz (e o que não traz)
 
@@ -245,13 +231,11 @@ escritores em sqlite é o caminho curto para `database is locked`.
 
 ## O que falta
 
-- `sanidade.py` — o detector de dado envenenado, com as duas respostas reais
-  (limpa e fabricada) como fixture;
-- `menor_preco.py` + tarefa de fundo — enriquecer produto com código de barras e
-  NCM, e acompanhar preço na região;
-- abas **Ofertas** e **Lista de compras** (qual mercado sai mais barato para a
-  lista, mostrando junto a cobertura — loja barata que só cobre metade da lista
-  não pode ganhar em silêncio);
+- comparação entre mercados a partir do histórico da própria casa, e aba
+  **Lista de compras** mostrando junto a cobertura — loja barata que só cobre
+  metade da lista não pode ganhar em silêncio;
+- unificação de produto na mão, já que sem o Menor Preço não há GTIN para casar
+  automaticamente descrições de lojas diferentes;
 - backup diário do banco (`VACUUM INTO`, guardando 7);
 - OCR do cupom inteiro, para comércio que não emite NFC-e. O lugar está
   reservado: `cupom.origem` já aceita `'foto'` e o Pillow já está na imagem.
