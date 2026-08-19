@@ -126,3 +126,19 @@ def test_a_pwa_e_servida(cliente):
     assert "cupomzinho" in cliente.get("/").text
     assert cliente.get("/app.js").status_code == 200
     assert cliente.get("/manifest.webmanifest").status_code == 200
+
+
+def test_teto_de_consultas_vira_429_e_nao_500(cliente, monkeypatch):
+    """Regressão: o teto estourando no canário derrubava a rota com 500."""
+    from cupomzinho import menor_preco
+
+    def estoura(self, **_kwargs):
+        raise menor_preco.TetoAtingido("20 consultas na última hora. Libera às 15:20.")
+
+    monkeypatch.setattr(menor_preco.MenorPreco, "buscar", estoura)
+    lista = cliente.post("/api/listas", json={"nome": "x"}).json()["id"]
+    resposta = cliente.post(f"/api/lista/{lista}/pesquisar")
+    assert resposta.status_code == 429
+    assert "Libera às" in resposta.json()["detail"]
+
+    assert cliente.post("/api/enriquecer?quantos=1").status_code == 429

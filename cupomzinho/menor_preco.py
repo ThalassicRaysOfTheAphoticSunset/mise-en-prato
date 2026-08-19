@@ -48,7 +48,14 @@ ESPERA_ENTRE_CONSULTAS = 2.0    # segundos
 
 
 class TetoAtingido(Exception):
-    """O teto de consultas por hora foi alcançado. Não é erro: é a regra 3."""
+    """O teto de consultas por hora foi alcançado. Não é erro: é a regra 3.
+
+    Carrega `libera_em` para a tela poder dizer QUANDO, em vez de só "não".
+    """
+
+    def __init__(self, mensagem: str, libera_em=None):
+        super().__init__(mensagem)
+        self.libera_em = libera_em
 
 
 class RespostaSuspeita(Exception):
@@ -80,6 +87,17 @@ class MenorPreco:
         self._ultima_resposta: dict = {}
 
     # ── teto e diário ────────────────────────────────────────────────────────
+    def quando_libera(self) -> datetime | None:
+        """Quando a consulta mais antiga da janela sai da conta e abre uma vaga."""
+        linha = self.con.execute(
+            "SELECT feita_em FROM consulta_menor_preco"
+            " WHERE feita_em > ? ORDER BY feita_em LIMIT 1",
+            ((datetime.now() - timedelta(hours=1)).isoformat(sep=" ", timespec="seconds"),)
+        ).fetchone()
+        if not linha:
+            return None
+        return datetime.fromisoformat(linha["feita_em"]) + timedelta(hours=1)
+
     def consultas_na_ultima_hora(self) -> int:
         limite = (datetime.now() - timedelta(hours=1)).isoformat(sep=" ", timespec="seconds")
         return self.con.execute(
@@ -99,9 +117,12 @@ class MenorPreco:
     def buscar(self, *, termo: str = "", gtin: str = "") -> list[dict]:
         """Uma consulta, validada. Levanta TetoAtingido ou RespostaSuspeita."""
         if self.consultas_na_ultima_hora() >= self.cfg.teto_consultas_hora:
+            libera = self.quando_libera()
             raise TetoAtingido(
                 f"{self.cfg.teto_consultas_hora} consultas na última hora — "
-                "o teto existe para esta app não virar o robô que o termo proíbe")
+                "o teto existe para esta app não virar o robô que o termo proíbe"
+                + (f". Libera às {libera:%H:%M}." if libera else ""),
+                libera_em=libera)
 
         parametros = {"local": self.cfg.local, "raio": self.cfg.raio_km,
                       "data": self.cfg.dias_janela, "offset": 0, "ordem": 0}
@@ -123,6 +144,10 @@ class MenorPreco:
             raise RespostaSuspeita(veredito)
         return resposta.get("produtos") or []
 
+    # ATENÇÃO: `canario` NÃO captura TetoAtingido de propósito — teto não é
+    # "API degradada", e tratá-lo aqui responderia "a API está mentindo" quando
+    # o que houve foi a casa ter consultado demais. Quem chama trata, e o
+    # tratador de exceção do main.py garante que vire 429 e não 500.
     def canario(self) -> bool:
         """Uma consulta que não colhe nada e diz se a API está sã.
 

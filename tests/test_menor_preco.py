@@ -173,3 +173,31 @@ def test_guardar_e_idempotente(con):
     produto_id = con.execute("SELECT id FROM produto LIMIT 1").fetchone()[0]
     guardar(con, produto_id, SADIO["produtos"])
     assert guardar(con, produto_id, SADIO["produtos"]) == 0
+
+
+def test_teto_no_canario_nao_pode_virar_erro_de_servidor(con):
+    """O canário roda ANTES do lote — se o teto estourar ali, tem de ser tratado.
+
+    Foi o defeito vivido: `canario` só capturava RespostaSuspeita, o
+    TetoAtingido vazava e a tela recebia 500 em vez de "libera às 15:20".
+    """
+    c = cliente(con, SADIO)
+    for _ in range(3):
+        c.buscar(termo="leite")
+    with pytest.raises(TetoAtingido):
+        c.canario()
+
+
+def test_teto_diz_quando_libera(con):
+    c = cliente(con, SADIO)
+    for _ in range(3):
+        c.buscar(termo="leite")
+    with pytest.raises(TetoAtingido) as erro:
+        c.buscar(termo="leite")
+    assert erro.value.libera_em is not None
+    assert "Libera às" in str(erro.value)
+    assert c.quando_libera() is not None
+
+
+def test_sem_consulta_nenhuma_nao_ha_o_que_liberar(con):
+    assert cliente(con, SADIO).quando_libera() is None

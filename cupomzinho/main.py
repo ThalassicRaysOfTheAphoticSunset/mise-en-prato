@@ -117,6 +117,17 @@ async def ciclo_de_vida(app: FastAPI):
 app = FastAPI(title="cupomzinho", default_response_class=RespostaJSON, lifespan=ciclo_de_vida)
 
 
+@app.exception_handler(menor_preco.TetoAtingido)
+async def teto_virou_429(_request: Request, erro: menor_preco.TetoAtingido):
+    """Teto de consultas não é falha do servidor — é a regra funcionando.
+
+    Existe como tratador global, e não como try/except numa rota, porque o teto
+    pode estourar em qualquer ponto que consulte: no canário antes do lote, no
+    meio dele, ou numa rota que ainda nem foi escrita. Vazando, virava 500.
+    """
+    return RespostaJSON({"detail": str(erro)}, status_code=429)
+
+
 def banco(request: Request) -> sqlite3.Connection:
     return request.app.state.con
 
