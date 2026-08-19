@@ -10,6 +10,8 @@ const quantia = (q) => {
   const n = Number(q);
   return Number.isInteger(n) ? String(n) : n.toFixed(3).replace(/0+$/, '').replace('.', ',');
 };
+/* "6 Un" / "0,876 KG" / "—" quando as unidades divergem entre compras. */
+const quanto = (q, u) => (q == null ? '' : `${quantia(q)} ${u || ''}`.trim());
 const dia = (iso) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '—');
 const mesLongo = (m) => {
   const [a, x] = m.split('-');
@@ -170,7 +172,8 @@ carregadores.gastos = async () => {
   $('#maiores').innerHTML = resumo.maiores.length
     ? `<table>${resumo.maiores.map((p) => `
         <tr class="clicavel" onclick="verProduto(${p.produto_id})">
-          <td>${p.descricao}<div class="fraca">${p.vezes}× no mês</div></td>
+          <td>${p.descricao}<div class="fraca">${quanto(p.quantidade, p.unidade)}
+            ${p.compras > 1 ? `em ${p.compras} compras` : 'em 1 compra'}</div></td>
           <td class="num">${dinheiro(p.total)}</td></tr>`).join('')}</table>`
     : '<div class="fraca">sem dados</div>';
 };
@@ -189,7 +192,8 @@ carregadores.produtos = async () => {
     ? produtos.map((p) => `
         <div class="linha clicavel" onclick="verProduto(${p.id})">
           <div>${p.descricao}
-            <div class="fraca">${p.vezes}× · último ${dinheiro(p.ultimo)}
+            <div class="fraca">${quanto(p.quantidade, p.unidade)} em ${p.compras}
+              ${p.compras > 1 ? 'compras' : 'compra'} · último ${dinheiro(p.ultimo)}
               ${p.gtin ? '' : '· <span class="selo">sem código de barras</span>'}</div>
           </div>
           <strong class="num">${dinheiro(p.gasto)}</strong>
@@ -207,6 +211,10 @@ window.verProduto = async (id) => {
       <div class="linha"><strong>${p.descricao}</strong>
         ${p.gtin ? `<span class="selo">${p.gtin}</span>` : ''}</div>
       <div class="linha" style="margin-top:.6rem">
+        <span class="fraca">comprado</span>
+        <span class="num">${quanto(p.quantidade_total, p.unidade) || '—'}
+          em ${p.total_compras} ${p.total_compras > 1 ? 'compras' : 'compra'}</span></div>
+      <div class="linha">
         <span class="fraca">menor pago</span><span class="num">${dinheiro(p.menor_pago)}</span></div>
       <div class="linha"><span class="fraca">mediana</span>
         <span class="num">${dinheiro(p.mediana_paga)}</span></div>

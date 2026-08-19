@@ -138,3 +138,38 @@ def test_backup_e_poda(con, cupom, tmp_path):
         (pasta / f"cupomzinho_2026-01-{dia:02d}.db").write_bytes(b"")
     fazer_backup(con, pasta, guardar=7)
     assert len(list(pasta.glob("cupomzinho_*.db"))) == 7
+
+
+def test_relatorio_conta_quantidade_e_nao_linha_de_cupom(con, cupom):
+    """Contar linha mente nos dois sentidos, e as duas mentiras estão no cupom real.
+
+    O atum ocupa DUAS linhas de 1 unidade na MESMA nota: contar linhas diria
+    "2 compras", quando foi uma ida ao mercado com duas latas. E um item de
+    seis unidades numa linha só diria "1", que foi como R$ 50,34 de bebida
+    apareceram como comprados "1x".
+    """
+    from cupomzinho.relatorios import produtos, resumo_do_mes
+
+    gravar(con, cupom, morador="Miguel")
+    atum = next(p for p in produtos(con) if p["descricao"].startswith("ATUM"))
+    assert atum["quantidade"] == Decimal("2.000")   # duas latas
+    assert atum["compras"] == 1                     # numa ida só
+    assert atum["unidade"] == "PT"
+
+    maiores = resumo_do_mes(con, "2026-08")["maiores"]
+    molho = next(m for m in maiores if m["descricao"].startswith("MOLHO"))
+    assert molho["quantidade"] == Decimal("2.000")  # linha única, 2 unidades
+    assert molho["compras"] == 1
+
+
+def test_quantidade_some_quando_as_unidades_divergem(con, cupom):
+    """Somar 2 CX com 0,5 KG daria um número sem significado — melhor não somar."""
+    from cupomzinho.relatorios import produtos
+
+    gravar(con, cupom, morador="Miguel")
+    # o atum tem DUAS linhas: dá para deixar uma em PT e outra em KG
+    con.execute("UPDATE item SET unidade = 'KG' WHERE seq = 2")
+    con.commit()
+    atum = next(p for p in produtos(con) if p["descricao"].startswith("ATUM"))
+    assert atum["quantidade"] is None and atum["unidade"] is None
+    assert atum["compras"] == 1        # o número de compras continua honesto

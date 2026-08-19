@@ -13,6 +13,22 @@ from .banco import reais, unidades
 SEM_CATEGORIA = "sem categoria"
 
 
+def _quanto(linha) -> dict:
+    """Quanto se comprou, em unidade de verdade — não em linhas de cupom.
+
+    Contar linha é o erro fácil e mentiroso nos dois sentidos: seis garrafas
+    numa linha só viravam "1x", e duas latas do mesmo atum na mesma nota
+    viravam "2x" como se fossem duas idas ao mercado.
+
+    Quando o produto aparece com unidades diferentes entre compras (raro, mas
+    acontece quando a loja troca de cadastro), somar seria inventar: a
+    quantidade sai como None e a tela mostra só o número de compras.
+    """
+    if linha["unidades"] != 1:
+        return {"quantidade": None, "unidade": None}
+    return {"quantidade": unidades(linha["quantidade"]), "unidade": linha["unidade"]}
+
+
 def meses_com_gasto(con: sqlite3.Connection, limite: int = 12) -> list[dict]:
     """Série mensal, do mês mais recente para trás. É o gráfico da aba Gastos."""
     return [
@@ -79,10 +95,17 @@ def resumo_do_mes(con: sqlite3.Connection, mes: str | None = None) -> dict:
 
     maiores = [
         {"produto_id": r["produto_id"], "descricao": r["descricao"],
-         "total": reais(r["total"]), "vezes": r["vezes"]}
+         "total": reais(r["total"]), "compras": r["compras"],
+         **_quanto(r)}
         for r in con.execute("""
             SELECT i.produto_id, p.descricao_canonica AS descricao,
-                   SUM(i.total_centavos) AS total, COUNT(*) AS vezes
+                   SUM(i.total_centavos) AS total,
+                   -- compras = idas ao mercado, NÃO linhas de cupom: o mesmo
+                   -- produto pode aparecer em duas linhas da mesma nota.
+                   COUNT(DISTINCT i.chave) AS compras,
+                   SUM(i.quantidade_milesimos) AS quantidade,
+                   COUNT(DISTINCT i.unidade) AS unidades,
+                   MAX(i.unidade) AS unidade
               FROM item i
               JOIN cupom c ON c.chave = i.chave
               JOIN produto p ON p.id = i.produto_id
@@ -108,10 +131,15 @@ def produtos(con: sqlite3.Connection, busca: str = "", limite: int = 100) -> lis
     return [
         {"id": r["id"], "descricao": r["apelido"] or r["descricao_canonica"],
          "gtin": r["gtin"], "categoria": r["categoria"],
-         "acompanhar": bool(r["acompanhar"]), "vezes": r["vezes"],
-         "gasto": reais(r["gasto"] or 0), "ultimo": reais(r["ultimo"])}
+         "acompanhar": bool(r["acompanhar"]), "compras": r["compras"],
+         "gasto": reais(r["gasto"] or 0), "ultimo": reais(r["ultimo"]),
+         **_quanto(r)}
         for r in con.execute("""
-            SELECT p.*, COUNT(i.id) AS vezes, SUM(i.total_centavos) AS gasto,
+            SELECT p.*, COUNT(DISTINCT i.chave) AS compras,
+                   SUM(i.quantidade_milesimos) AS quantidade,
+                   COUNT(DISTINCT i.unidade) AS unidades,
+                   MAX(i.unidade) AS unidade,
+                   SUM(i.total_centavos) AS gasto,
                    (SELECT i2.unitario_centavos FROM item i2
                       JOIN cupom c2 ON c2.chave = i2.chave
                      WHERE i2.produto_id = p.id
@@ -160,6 +188,12 @@ def historico_do_produto(con: sqlite3.Connection, produto_id: int) -> dict:
         "descricao_canonica": produto["descricao_canonica"],
         "gtin": produto["gtin"], "categoria": produto["categoria"],
         "acompanhar": bool(produto["acompanhar"]),
+        "total_compras": len({c["data"] for c in compras}),
+        # Só soma se a unidade for a mesma em todas as compras — somar 2 CX com
+        # 0,5 KG daria um número que não significa nada.
+        "quantidade_total": (sum((c["quantidade"] for c in compras), Decimal("0"))
+                             if len({c["unidade"] for c in compras}) == 1 else None),
+        "unidade": compras[0]["unidade"] if len({c["unidade"] for c in compras}) == 1 else None,
         "mediana_paga": pagos[len(pagos) // 2] if pagos else None,
         "menor_pago": pagos[0] if pagos else None,
         "maior_pago": pagos[-1] if pagos else None,
