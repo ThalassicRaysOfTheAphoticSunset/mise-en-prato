@@ -32,6 +32,7 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 testpaths = ["tests"]
 # sem instalar o próprio pacote: o pytest acha o cupomzinho/ pela raiz do repo
 pythonpath = ["."]

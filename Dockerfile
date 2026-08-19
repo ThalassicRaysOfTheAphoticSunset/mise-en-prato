@@ -29,4 +29,4 @@ FROM base AS producao
 COPY cupomzinho/ ./cupomzinho/
 # uid 1000 = miguel, o mesmo dono de /mnt/data
 USER 1000:1000
-CMD ["uvicorn", "cupomzinho.main:app", "--host", "0.0.0.0", "--port", "8090"]
+CMD ["python", "-m", "cupomzinho"]

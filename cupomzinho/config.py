@@ -17,6 +17,9 @@ class Config(BaseSettings):
     # ── onde ficam as coisas ─────────────────────────────────────────────────
     dados: Path = Path("/dados")
     porta: int = 8090
+    # Em que endereço prender. Em produção é o IP da tailnet, e quem prende é o
+    # PRÓPRIO uvicorn, não a publicação de porta do Docker — ver o compose.
+    escutar: str = "0.0.0.0"
 
     # ── a busca no Menor Preço ───────────────────────────────────────────────
     # LOCAL é o centro da busca, "lat,lon". O padrão é Medianeira; trocar de

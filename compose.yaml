@@ -15,17 +15,26 @@ services:
     restart: unless-stopped
     # uid 1000 = miguel, o dono de /mnt/data. O contêiner escreve o banco.
     user: "1000:1000"
-    ports:
-      # Bind no IP da tailnet, não em 0.0.0.0: isto é o extrato de mercado da
-      # casa, e visita no Wi-Fi de casa é LAN, não é morador (mesma decisão do
-      # painel). Preço a pagar, igual ao de lá: se o tailscaled não estiver de
-      # pé, o bind falha e o contêiner só sobe na volta do `restart`. Se o IP
-      # da tailnet mudar, é esta linha.
-      - 100.122.128.48:8090:8090
+    # Rede do host, e NÃO publicação de porta. Aqui está a razão, que custou um
+    # teste no celular para aparecer: em rede bridge o Docker mascara o IP de
+    # origem dos clientes externos, e o contêiner recebe o gateway da bridge
+    # (172.x) no lugar do IP da tailnet de quem pediu. Do próprio host o teste
+    # passa por coincidência — a origem já é 100.122.128.48 —, então o defeito
+    # só aparece de fora. Sem o IP real não há `whois`, e sem `whois` todo
+    # morador leva 403. Mesma escolha do vigia, por motivo parecido.
+    network_mode: host
     environment:
       - TZ=America/Sao_Paulo
       - PYTHONUNBUFFERED=1 # senão o log do contêiner só aparece em blocos
       - DADOS=/dados
+      # Com a rede do host, quem prende a porta é o uvicorn. Prender no IP da
+      # tailnet e não em 0.0.0.0 é o que mantém a promessa: isto é o extrato de
+      # mercado da casa, e visita no Wi-Fi de casa é LAN, não é morador (mesma
+      # decisão do painel). Preço a pagar, igual ao de lá: sem tailscaled de pé
+      # o bind falha e o contêiner só sobe na volta do `restart`. Se o IP da
+      # tailnet mudar, é esta linha.
+      - ESCUTAR=${ESCUTAR:-100.122.128.48}
+      - PORTA=${PORTA:-8090}
       # LOCAL é o centro da busca no Menor Preço, "lat,lon" — Medianeira.
       - LOCAL=${LOCAL:--25.2947,-54.0940}
       - RAIO_KM=${RAIO_KM:-15}

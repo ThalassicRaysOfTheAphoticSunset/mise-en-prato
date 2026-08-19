@@ -10,12 +10,18 @@ O login que volta ("miguelvictor91") vira nome de morador pela env MORADORES.
 Quem não está na lista é visita do nó compartilhado — e visita não registra
 compra da casa.
 """
+import ipaddress
+
 import httpx
 
 from .config import config
 
 # A LocalAPI exige este Host; o endereço real é o socket unix.
 HOST_LOCALAPI = "local-tailscaled.sock"
+
+# A tailnet vive na faixa CGNAT 100.64.0.0/10, e NÃO em "100.*" inteiro —
+# 100.0.0.0/10 e 100.128.0.0/9 são endereços públicos de verdade.
+TAILNET = ipaddress.ip_network("100.64.0.0/10")
 
 
 class NaoIdentificado(Exception):
@@ -32,7 +38,14 @@ async def quem_e(ip: str, porta: int) -> str:
     if not cfg.exigir_tailnet:
         return "dev"
 
-    if not ip.startswith("100."):
+    try:
+        na_tailnet = ipaddress.ip_address(ip) in TAILNET
+    except ValueError:
+        na_tailnet = False
+    if not na_tailnet:
+        # Sintoma clássico quando isto dispara com um IP tipo 172.x: o
+        # contêiner está em rede bridge e o Docker mascarou a origem. A cura é
+        # network_mode: host, com o uvicorn prendendo no IP da tailnet.
         raise NaoIdentificado(f"{ip} não é endereço da tailnet")
 
     transporte = httpx.AsyncHTTPTransport(uds=str(cfg.tailscaled_sock))

@@ -45,6 +45,13 @@ O servidor escuta **só no IP da tailnet**. Quem chega já passou pelo Tailscale
 então basta perguntar ao `tailscaled` quem é aquele IP — é o que a LocalAPI faz,
 pelo socket unix, sem CLI dentro do contêiner e sem privilégio nenhum.
 
+Por isso o contêiner usa **`network_mode: host`**, e quem prende a porta é o
+uvicorn (env `ESCUTAR`), não a publicação de porta do Docker. Em rede bridge o
+Docker mascara o IP de origem dos clientes externos, e o servidor recebe o
+gateway da bridge (`172.x`) no lugar do IP de quem pediu — aí ninguém é morador.
+O detalhe cruel é que, testado do próprio host, funciona: ali a origem já é o
+IP da tailnet. Só aparece de outro aparelho.
+
 Quem está na tailnet mas não está em `MORADORES` é visita de share do nó, e
 leva 403. Visita não registra compra da casa.
 
