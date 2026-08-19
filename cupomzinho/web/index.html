@@ -21,6 +21,7 @@
   <button data-aba="enviar" class="ativa">Enviar</button>
   <button data-aba="gastos">Gastos</button>
   <button data-aba="produtos">Produtos</button>
+  <button data-aba="lista">Lista</button>
 </nav>
 
 <main>
@@ -71,6 +72,16 @@
     <input id="busca" type="search" placeholder="buscar produto…" autocomplete="off">
     <div id="lista-produtos" class="lista"></div>
     <div id="produto-detalhe"></div>
+  </section>
+  <!-- ── lista ──────────────────────────────────────────────────────────── -->
+  <section id="aba-lista" hidden>
+    <div id="lista-cabeca"></div>
+    <div id="lista-itens" class="lista"></div>
+    <div id="lista-acao"></div>
+    <div id="lista-estado" class="estado" hidden></div>
+    <div id="lista-comparacao"></div>
+    <h2>Adicionar do que a casa compra</h2>
+    <div id="lista-sugestoes" class="lista"></div>
   </section>
 </main>
 

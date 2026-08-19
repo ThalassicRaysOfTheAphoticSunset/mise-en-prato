@@ -118,6 +118,25 @@ não por pedido de ninguém.
 5. **Cache no banco.** O preço de ontem responde a pergunta de hoje; não se
    pergunta duas vezes a mesma coisa.
 
+### Os parâmetros da API, medidos
+
+`GET /api/v1/produtos?local=&raio=&data=&offset=&ordem=&termo=|gtin=[&categoria=]`
+
+| Parâmetro | O que se sabe |
+|---|---|
+| `local` | aceita `lat,lon` **e** geohash (`6g98151gk`); o front usa geohash |
+| `gtin` | busca exata por código de barras — é o caminho bom quando se tem |
+| `termo` | busca por texto; buscar o nome exato do produto é legítimo e comum |
+| `data` | **não é janela estrita**: com `data=7` vieram observações de 14 dias antes. `data=-1` devolveu resultado IDÊNTICO a `data=7`. `data=30` pendura a conexão |
+| `categoria` | filtro adicional que o front oferece depois de `/api/v1/categorias`. Sem serventia aqui: buscando por gtin ou nome exato a precisão já é alta |
+| `raio` | km a partir de `local` |
+
+Como `data` não é janela estrita, **a app não filtra de novo por data ao
+comparar** — filtrar em 7 dias do nosso lado descartava preço que a própria
+fonte deu por vigente, e fazia loja com preço válido sumir da comparação como
+se não vendesse o item. A janela nossa é larga (30 dias) e a tela mostra a data
+da observação mais antiga de cada loja, para quem lê julgar.
+
 ### O modo degradado existe, e é silencioso
 
 Isto foi medido, e é o motivo de a regra 4 não ser opcional.

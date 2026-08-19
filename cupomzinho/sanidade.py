@@ -9,11 +9,17 @@ pior forma de estragar.
 Os sinais abaixo foram medidos em 19/08/2026, comparando respostas sadias com
 respostas degradadas capturadas de verdade (as duas estão em tests/fixtures/):
 
-    eco do termo     desc igual, letra por letra, ao termo consultado
     ncm              9 dígitos na degradada; NCM tem 8
     uf               ES e PE numa busca de 15 km em Medianeira
     uniformidade     50 resultados de 30 lojas com UMA descrição só
     dígito do gtin   código de barras que não fecha no dígito verificador
+
+O eco do termo — descrição igual, letra por letra, ao que se consultou — é o
+sinal mais forte de todos, mas SÓ vale com um termo impossível. Buscar pelo
+nome exato de um produto faz a API sadia devolver exatamente aquele nome, que é
+o nome dele; a regra não distingue as duas coisas e recusava dado bom. Por isso
+o eco mora em `canario_passou()`, aplicado a um termo que não existe, e não em
+`avaliar()`. Custou três consultas legítimas recusadas para isso ficar claro.
 
 E um sinal que NÃO serve, e está aqui escrito para ninguém tentar de novo:
 `distkm` vem coerente com o raio pedido também na resposta falsa.
@@ -50,33 +56,43 @@ def digito_gtin_confere(gtin: str) -> bool:
     return (10 - soma % 10) % 10 == verificador
 
 
-def avaliar(resposta: dict, *, termo: str = "", gtin: str = "") -> Veredito:
+def canario_passou(resposta: dict, termo: str) -> Veredito:
+    """A prova do termo impossível: resposta sadia devolve ZERO resultado.
+
+    Só se usa com um termo que não existe em produto nenhum. É aqui que o eco
+    é sinal — e só aqui.
+    """
+    produtos = resposta.get("produtos") or []
+    if not produtos:
+        return Veredito(True)
+    alvo = normalizar(termo)
+    ecos = sum(1 for p in produtos if normalizar(p.get("desc", "")) == alvo)
+    if ecos > len(produtos) / 2:
+        return Veredito(False, [
+            f"{ecos} de {len(produtos)} descrições são o eco literal de um termo inexistente"])
+    return Veredito(False, [f"{len(produtos)} resultados para um termo que não existe"])
+
+
+def avaliar(resposta: dict, *, gtin: str = "") -> Veredito:
     """Diz se dá para acreditar nesta resposta. Recusa é sempre da resposta toda."""
     motivos: list[str] = []
     produtos = resposta.get("produtos") or []
     if not produtos:
-        # Zero resultado é resposta legítima — inclusive é o que o canário espera.
+        # Zero resultado é resposta legítima.
         return Veredito(True)
 
-    # 1. eco: a degradada devolve o próprio termo como nome de produto
-    if termo:
-        alvo = normalizar(termo)
-        ecos = sum(1 for p in produtos if normalizar(p.get("desc", "")) == alvo)
-        if ecos > len(produtos) / 2:
-            motivos.append(f"{ecos} de {len(produtos)} descrições são o eco literal do termo")
-
-    # 2. NCM tem 8 dígitos. A degradada devolveu 9.
+    # 1. NCM tem 8 dígitos. A degradada devolveu 9.
     ncms = {re.sub(r"\D", "", p.get("ncm") or "") for p in produtos}
     tortos = {n for n in ncms if n and len(n) != 8}
     if tortos:
         motivos.append(f"ncm com tamanho impossível: {sorted(tortos)[:3]}")
 
-    # 3. plataforma do Paraná não devolve loja de outro estado
+    # 2. plataforma do Paraná não devolve loja de outro estado
     ufs = {(p.get("estabelecimento") or {}).get("uf") for p in produtos} - {None, ""}
     if ufs - {UF_ESPERADA}:
         motivos.append(f"estabelecimento fora do {UF_ESPERADA}: {sorted(ufs - {UF_ESPERADA})}")
 
-    # 4. muitos resultados, muitas lojas, uma descrição só: dado real varia
+    # 3. muitos resultados, muitas lojas, uma descrição só: dado real varia
     if len(produtos) >= MINIMO_PARA_UNIFORMIDADE:
         descricoes = {p.get("desc") for p in produtos}
         lojas = {(p.get("estabelecimento") or {}).get("nm_emp") for p in produtos}
@@ -84,7 +100,7 @@ def avaliar(resposta: dict, *, termo: str = "", gtin: str = "") -> Veredito:
             motivos.append(
                 f"{len(produtos)} resultados de {len(lojas)} lojas com uma descrição só")
 
-    # 5. código de barras que não fecha, ou que não é o pedido
+    # 4. código de barras que não fecha, ou que não é o pedido
     codigos = {re.sub(r"\D", "", p.get("gtin") or "") for p in produtos} - {""}
     invalidos = {c for c in codigos if not digito_gtin_confere(c)}
     if invalidos:

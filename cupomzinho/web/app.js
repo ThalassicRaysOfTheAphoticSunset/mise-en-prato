@@ -38,7 +38,7 @@ const carregadores = {};
 document.querySelectorAll('#abas button').forEach((botao) => {
   botao.onclick = () => {
     document.querySelectorAll('#abas button').forEach((b) => b.classList.toggle('ativa', b === botao));
-    ['enviar', 'gastos', 'produtos'].forEach((nome) => {
+    ['enviar', 'gastos', 'produtos', 'lista'].forEach((nome) => {
       $('#aba-' + nome).hidden = nome !== botao.dataset.aba;
     });
     carregadores[botao.dataset.aba]?.();
@@ -265,6 +265,128 @@ window.verProduto = async (id) => {
       <table>${compras || '<tr><td class="fraca">sem compras</td></tr>'}</table>
     </div>`;
   $('#produto-detalhe').scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+/* ── lista de compras ─────────────────────────────────────────────────────── */
+let listaAtual = null;
+
+carregadores.lista = async () => {
+  const { listas, sugestoes } = await api('/api/listas');
+  if (!listas.length) {
+    $('#lista-cabeca').innerHTML = `<div class="cartao">
+      <div class="fraca">Nenhuma lista ainda.</div>
+      <button class="acao" style="margin-top:.6rem" onclick="novaLista()">Criar lista</button>
+    </div>`;
+    $('#lista-itens').innerHTML = $('#lista-acao').innerHTML = '';
+    $('#lista-comparacao').innerHTML = '';
+  } else {
+    if (!listas.some((l) => l.id === listaAtual)) listaAtual = listas[0].id;
+    $('#lista-cabeca').innerHTML = `
+      <div class="linha">
+        <select id="qual-lista" onchange="listaAtual=Number(this.value);carregadores.lista()">
+          ${listas.map((l) => `<option value="${l.id}" ${l.id === listaAtual ? 'selected' : ''}>
+            ${l.nome} (${l.itens})</option>`).join('')}
+        </select>
+        <button class="acao" onclick="novaLista()">nova</button>
+      </div>`;
+    await desenharLista();
+  }
+  $('#lista-sugestoes').innerHTML = sugestoes.map((s) => `
+    <div class="linha clicavel" onclick="porNaLista(${s.produto_id})">
+      <div>${s.descricao}<div class="fraca">${s.compras}
+        ${s.compras > 1 ? 'compras' : 'compra'} · último ${dinheiro(s.ultimo)}</div></div>
+      <span class="acao" style="padding:.3rem .7rem">+</span>
+    </div>`).join('');
+};
+
+async function desenharLista() {
+  const { itens, comparacao } = await api('/api/lista/' + listaAtual);
+  $('#lista-itens').innerHTML = itens.length
+    ? itens.map((i) => `
+        <div class="linha">
+          <div>${i.descricao}<div class="fraca">${quantia(i.quantidade)}
+            ${i.gtin ? '· com código de barras' : ''}</div></div>
+          <span class="clicavel fraca" onclick="tirarDaLista(${i.produto_id})">remover</span>
+        </div>`).join('')
+    : '<div class="fraca">Lista vazia. Escolha abaixo o que a casa costuma comprar.</div>';
+  $('#lista-acao').innerHTML = itens.length ? `
+    <button class="acao" style="width:100%;margin-top:.8rem" onclick="pesquisarPrecos()">
+      Pesquisar preços na região</button>
+    <p class="dica">Consulta o Menor Preço do Paraná, um item por vez. Só acontece
+      quando você aperta — a app nunca consulta sozinha.</p>` : '';
+  desenharComparacao(comparacao);
+}
+
+/* A cobertura vem SEMPRE colada no total. Loja que só tem metade da lista
+   parece a mais barata, e deixá-la ganhar calada seria mentir com número
+   verdadeiro. */
+function desenharComparacao(c) {
+  if (!c || !c.lojas.length) {
+    $('#lista-comparacao').innerHTML = c && c.sem_preco && c.sem_preco.length
+      ? `<div class="estado">Ainda não há preço para: ${c.sem_preco.join(', ')}.</div>` : '';
+    return;
+  }
+  $('#lista-comparacao').innerHTML = `
+    <h2>Onde sai mais barato</h2>
+    <div class="lista">${c.lojas.map((l, k) => `
+      <div>
+        <div class="linha">
+          <div><strong>${k === 0 && l.completa ? '★ ' : ''}${l.loja}</strong>
+            <div class="fraca">${l.distancia_km != null ? `${l.distancia_km} km · ` : ''}
+              ${l.cobertura} de ${l.de} itens
+              ${l.mais_antigo ? `· desde ${dia(l.mais_antigo)}` : ''}
+              ${l.completa ? '' : `· falta ${l.falta.join(', ')}`}</div></div>
+          <strong class="num">${dinheiro(l.total)}</strong>
+        </div>
+      </div>`).join('')}</div>
+    ${c.sem_preco.length ? `<div class="estado" style="margin-top:.7rem">
+      Sem preço em lugar nenhum: ${c.sem_preco.join(', ')}.</div>` : ''}
+    <p class="dica">Preços dos últimos ${c.janela_dias} dias, do que a casa pagou
+      e do que a região praticou.</p>`;
+}
+
+window.novaLista = async () => {
+  const nome = prompt('Nome da lista', 'compras da semana');
+  if (!nome) return;
+  const r = await api('/api/listas', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ nome }),
+  });
+  listaAtual = r.id;
+  carregadores.lista();
+};
+
+window.porNaLista = async (produto_id) => {
+  if (!listaAtual) { await window.novaLista(); if (!listaAtual) return; }
+  await api(`/api/lista/${listaAtual}/item`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ produto_id, quantidade: '1' }),
+  });
+  desenharLista();
+};
+
+window.tirarDaLista = async (produto_id) => {
+  await api(`/api/lista/${listaAtual}/item/${produto_id}`, { method: 'DELETE' });
+  desenharLista();
+};
+
+window.pesquisarPrecos = async () => {
+  const caixa = $('#lista-estado');
+  caixa.hidden = false;
+  caixa.className = 'estado';
+  caixa.textContent = 'Consultando o Menor Preço, um item por vez…';
+  try {
+    const r = await api(`/api/lista/${listaAtual}/pesquisar`, { method: 'POST' });
+    const partes = [`${r.consultados} itens consultados`, `${r.guardados} preços novos`];
+    if (r.teto) partes.push(r.teto);
+    if (r.recusados.length) partes.push(`${r.recusados.length} respostas recusadas`);
+    if (r.sem_resultado.length) partes.push(`sem resultado: ${r.sem_resultado.join(', ')}`);
+    caixa.textContent = partes.join(' · ');
+    desenharComparacao(r.comparacao);
+  } catch (erro) {
+    caixa.className = 'estado ruim';
+    caixa.textContent = erro.message;
+  }
 };
 
 /* ── partida ──────────────────────────────────────────────────────────────── */

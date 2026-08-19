@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 
 from .banco import centavos
 from .config import config
-from .sanidade import Veredito, avaliar
+from .sanidade import Veredito, avaliar, canario_passou
 
 log = logging.getLogger("cupomzinho.menor_preco")
 
@@ -77,6 +77,7 @@ class MenorPreco:
         self.dormir = dormir
         self.cfg = config()
         self._ultima = 0.0
+        self._ultima_resposta: dict = {}
 
     # ── teto e diário ────────────────────────────────────────────────────────
     def consultas_na_ultima_hora(self) -> int:
@@ -113,8 +114,9 @@ class MenorPreco:
 
         resposta = self.http(parametros)
         self._ultima = time.monotonic()
+        self._ultima_resposta = resposta
 
-        veredito = avaliar(resposta, termo=termo, gtin=gtin)
+        veredito = avaliar(resposta, gtin=gtin)
         self._registrar(gtin or termo, veredito)
         if not veredito:
             log.warning("resposta suspeita para %r: %s", gtin or termo, veredito.motivos)
@@ -127,12 +129,20 @@ class MenorPreco:
         Vale a pena gastar uma requisição nisto antes de um lote: se a API está
         servindo base de teste, descobrir no canário custa uma consulta;
         descobrir item a item custa o lote inteiro e ainda suja o log.
+
+        Aqui a regra é outra e mais dura que a de `buscar`: com um termo que
+        não existe em produto nenhum, resposta sadia devolve ZERO. Qualquer
+        resultado já é sinal.
         """
         try:
             self.buscar(termo=CANARIO)
         except RespostaSuspeita:
             return False
-        return True
+        resposta = self._ultima_resposta
+        veredito = canario_passou(resposta, CANARIO)
+        if not veredito:
+            log.warning("canário reprovou: %s", veredito.motivos)
+        return bool(veredito)
 
 
 # ── gravação ─────────────────────────────────────────────────────────────────

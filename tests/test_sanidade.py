@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from cupomzinho.sanidade import avaliar, digito_gtin_confere
+from cupomzinho.sanidade import avaliar, canario_passou, digito_gtin_confere
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SADIO = json.loads((FIXTURES / "menor_preco_sadio.json").read_text(encoding="utf-8"))
@@ -18,7 +18,7 @@ DEGRADADO = json.loads((FIXTURES / "menor_preco_envenenado_gtin.json").read_text
 
 def test_resposta_sadia_passa():
     """37 produtos reais de Medianeira, capturados em 19/08/2026."""
-    v = avaliar(SADIO, termo="leite frimesa")
+    v = avaliar(SADIO)
     assert v.confiavel, v.motivos
     assert bool(v) is True
 
@@ -37,29 +37,56 @@ def test_cada_sinal_aparece_no_motivo(pedaco):
 
 
 def test_resposta_vazia_e_legitima():
-    """Zero resultado é o que o canário espera de uma API sadia."""
-    assert avaliar({"produtos": [], "total": 0}, termo="ZZQQXX FOOBAR 999G").confiavel
+    assert avaliar({"produtos": [], "total": 0}).confiavel
 
 
-def test_eco_do_termo_derruba():
+def test_buscar_pelo_nome_exato_do_produto_nao_e_eco():
+    """O falso positivo que custou três consultas legítimas recusadas.
+
+    Procurando "ATUM GOM COSTA RALADO NAT 170G", a API sadia devolve produtos
+    chamados exatamente assim — porque é o nome deles. A regra do eco não
+    distinguia isso de fraude, e por isso saiu de `avaliar`.
+    """
+    resposta = {"produtos": [
+        {"desc": "ATUM GOM COSTA RALADO NAT 170G", "ncm": "16042010",
+         "gtin": "7891167011779",
+         "estabelecimento": {"uf": "PR", "nm_emp": f"MERCADO {k}", "mun": "MEDIANEIRA"}}
+        for k in range(4)]}
+    assert avaliar(resposta).confiavel
+
+
+# ── o canário: só ali o eco é sinal ──────────────────────────────────────────
+def test_canario_sadio_devolve_zero():
+    assert canario_passou({"produtos": [], "total": 0}, "ZZQQXX FOOBAR 999G")
+
+
+def test_canario_reprova_o_eco():
     eco = {"produtos": [
         {"desc": "ZZQQXX FOOBAR 999G", "ncm": "04011010", "gtin": "",
          "estabelecimento": {"uf": "PR", "nm_emp": f"LOJA {k}"}} for k in range(6)]}
-    v = avaliar(eco, termo="ZZQQXX FOOBAR 999G")
-    assert not v.confiavel and "eco literal" in v.motivos[0]
+    v = canario_passou(eco, "ZZQQXX FOOBAR 999G")
+    assert not v and "eco literal" in v.motivos[0]
+
+
+def test_canario_reprova_qualquer_resultado():
+    """Termo que não existe não pode devolver produto nenhum, ecoado ou não."""
+    qualquer = {"produtos": [
+        {"desc": "OUTRA COISA", "ncm": "04011010", "gtin": "",
+         "estabelecimento": {"uf": "PR", "nm_emp": "LOJA"}}]}
+    assert not canario_passou(qualquer, "ZZQQXX FOOBAR 999G")
 
 
 def test_um_sinal_sozinho_ja_derruba():
     """Recusa é da resposta inteira: não se separa joio de trigo."""
     quase_bom = json.loads(json.dumps(SADIO))
     quase_bom["produtos"][0]["estabelecimento"]["uf"] = "SC"
-    assert not avaliar(quase_bom, termo="leite frimesa").confiavel
+    assert not avaliar(quase_bom).confiavel
 
 
 def test_ncm_de_9_digitos_derruba():
     quase_bom = json.loads(json.dumps(SADIO))
     quase_bom["produtos"][0]["ncm"] = "320078169"
-    v = avaliar(quase_bom, termo="leite frimesa")
+    v = avaliar(quase_bom)
     assert not v.confiavel and "ncm" in v.motivos[0]
 
 

@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import cupons, relatorios, tarefas, unificacao
+from . import cupons, listas, menor_preco, relatorios, tarefas, unificacao
 from .banco import conectar
 from .config import config
 from .identidade import NaoIdentificado, quem_e
@@ -288,6 +288,84 @@ async def recusar_par(recusa: Recusa, _: Morador, con: Banco):
     """"Não são a mesma coisa" — para o par não voltar a ser sugerido."""
     unificacao.recusar(con, recusa.desc_a, recusa.desc_b)
     return responder({"ok": True})
+
+
+# ── lista de compras ─────────────────────────────────────────────────────────
+class NovaLista(BaseModel):
+    nome: str = "compras"
+
+
+class ItemDaLista(BaseModel):
+    produto_id: int
+    quantidade: Decimal = Decimal("1")
+
+
+@app.get("/api/listas")
+async def ver_listas(_: Morador, con: Banco):
+    return responder({"listas": listas.listar(con), "sugestoes": listas.sugerir(con)})
+
+
+@app.post("/api/listas")
+async def nova_lista(dados: NovaLista, quem: Morador, con: Banco):
+    return responder({"id": listas.criar(con, dados.nome, quem)})
+
+
+@app.get("/api/lista/{lista_id}")
+async def ver_lista(lista_id: int, _: Morador, con: Banco):
+    return responder({"itens": listas.itens(con, lista_id),
+                      "comparacao": listas.comparar(con, lista_id)})
+
+
+@app.post("/api/lista/{lista_id}/item")
+async def por_item(lista_id: int, item: ItemDaLista, _: Morador, con: Banco):
+    listas.por_produto(con, lista_id, item.produto_id, item.quantidade)
+    return responder({"ok": True})
+
+
+@app.delete("/api/lista/{lista_id}/item/{produto_id}")
+async def tirar_item(lista_id: int, produto_id: int, _: Morador, con: Banco):
+    listas.tirar(con, lista_id, produto_id)
+    return responder({"ok": True})
+
+
+# Rota SÍNCRONA de propósito: o cliente do Menor Preço espaça as consultas com
+# sleep, e num handler async isso travaria o laço de eventos inteiro. Sendo
+# `def`, o FastAPI a roda numa thread e a PWA continua respondendo.
+@app.post("/api/lista/{lista_id}/pesquisar")
+def pesquisar_precos(lista_id: int, request: Request):
+    """Consulta o Menor Preço para os itens da lista. **Só a pedido de gente.**
+
+    É a única rota que fala com a API do estado, e ela existe porque alguém
+    apertou um botão. Antes do lote vai o canário: se a API estiver servindo
+    base de teste, descobrir aqui custa uma consulta em vez do lote inteiro.
+    """
+    con = request.app.state.con
+    cliente = menor_preco.MenorPreco(con)
+    relatorio = {"consultados": 0, "guardados": 0, "recusados": [], "sem_resultado": []}
+
+    if not cliente.canario():
+        raise HTTPException(
+            503, "a API do Menor Preço está devolvendo base de teste agora — "
+                 "nada foi gravado. Tente mais tarde.")
+
+    for item in listas.itens(con, lista_id):
+        try:
+            achados = cliente.buscar(gtin=item["gtin"] or "",
+                                     termo="" if item["gtin"] else item["descricao"])
+        except menor_preco.TetoAtingido as erro:
+            relatorio["teto"] = str(erro)
+            break
+        except menor_preco.RespostaSuspeita as erro:
+            relatorio["recusados"].append({"item": item["descricao"], "porque": str(erro)})
+            continue
+        relatorio["consultados"] += 1
+        if not achados:
+            relatorio["sem_resultado"].append(item["descricao"])
+            continue
+        relatorio["guardados"] += menor_preco.guardar(con, item["produto_id"], achados)
+
+    relatorio["comparacao"] = listas.comparar(con, lista_id)
+    return responder(relatorio)
 
 
 # ── a PWA ────────────────────────────────────────────────────────────────────

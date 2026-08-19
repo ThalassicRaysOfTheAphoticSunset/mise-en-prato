@@ -100,6 +100,32 @@ def test_canario_reconhece_os_dois_estados(con):
     assert cliente(con, DEGRADADO).canario() is False
 
 
+def test_canario_reprova_mesmo_resposta_estruturalmente_ok(con):
+    """O canário é mais duro que o `avaliar`: com termo impossível, zero é o certo.
+
+    Esta resposta passaria em todas as regras estruturais — ncm de 8 dígitos,
+    uf PR, gtin válido — e ainda assim é mentira, porque o termo não existe.
+    """
+    plausivel = {"produtos": [
+        {"desc": CANARIO, "ncm": "16042010", "gtin": "7891167011779",
+         "estabelecimento": {"uf": "PR", "nm_emp": f"MERCADO {k}", "mun": "MEDIANEIRA"}}
+        for k in range(5)], "total": 5}
+    c = cliente(con, plausivel)
+    assert c.canario() is False
+
+
+def test_busca_pelo_nome_exato_nao_e_recusada(con):
+    """Regressão do falso positivo: nome exato do produto não é eco."""
+    resposta = {"produtos": [
+        {"desc": "ATUM GOM COSTA RALADO NAT 170G", "ncm": "16042010",
+         "gtin": "7891167011779", "valor": "10.97", "distkm": "1.0",
+         "datahora": "2026-08-19T10:00:00.000Z",
+         "estabelecimento": {"uf": "PR", "nm_emp": "LAR", "mun": "MEDIANEIRA",
+                             "codigo": "abc"}}]}
+    achados = cliente(con, resposta).buscar(termo="ATUM GOM COSTA RALADO NAT 170G")
+    assert len(achados) == 1
+
+
 def test_canario_usa_termo_que_nao_existe(con):
     c = cliente(con, {"produtos": [], "total": 0})
     c.canario()
