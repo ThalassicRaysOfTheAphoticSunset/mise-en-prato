@@ -120,6 +120,17 @@ reação anunciada, não um defeito.
 A fixture `tests/fixtures/menor_preco_envenenado_gtin.json` guarda uma dessas
 respostas, como registro do que foi observado.
 
+**Não é bloqueio de IP.** Enquanto o servidor recebia dado fabricado, o
+navegador de um desktop na MESMA LAN — logo, no mesmo IP público — recebia dado
+limpo. O que separa os dois é a assinatura da requisição (User-Agent, Referer,
+Origin, cookies) somada à cadência, não o endereço. O uso normal da casa, pelo
+site e pelo app, nunca esteve comprometido.
+
+Isso torna o contorno tecnicamente fácil, e é exatamente por isso que ele não é
+feito: mandar cabeçalhos de navegador para atravessar a detecção é contornar
+uma medida anti-robô, e o termo proíbe sistema automatizado independentemente
+de como ele se apresenta. A porta estar destrancada não é convite.
+
 ### O que se faz no lugar
 
 Comparação de preço entre mercados sai do **histórico da própria casa** — os
