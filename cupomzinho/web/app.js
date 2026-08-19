@@ -6,6 +6,10 @@
 const $ = (s) => document.querySelector(s);
 const dinheiro = (v) =>
   v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const quantia = (q) => {
+  const n = Number(q);
+  return Number.isInteger(n) ? String(n) : n.toFixed(3).replace(/0+$/, '').replace('.', ',');
+};
 const dia = (iso) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '—');
 const mesLongo = (m) => {
   const [a, x] = m.split('-');
@@ -40,16 +44,15 @@ document.querySelectorAll('#abas button').forEach((botao) => {
 });
 
 /* ── enviar ───────────────────────────────────────────────────────────────── */
-function desenharCupom(resposta) {
-  const c = resposta.cupom;
+function cartaoCupom(c, selo) {
   const itens = c.itens.map((i) => `
-    <tr><td>${i.descricao}<div class="fraca">${i.quantidade} ${i.unidade || ''} ×
+    <tr><td>${i.descricao}<div class="fraca">${quantia(i.quantidade)} ${i.unidade || ''} ×
         ${dinheiro(i.valor_unitario)}</div></td>
         <td class="num">${dinheiro(i.valor_total)}</td></tr>`).join('');
-  $('#cupom-lido').innerHTML = `
+  return `
     <div class="cartao" style="margin-top:.9rem">
       <div class="linha"><strong>${c.loja}</strong>
-        <span class="selo">${resposta.novo ? 'novo' : 'já registrado'}</span></div>
+        <span class="selo">${selo}</span></div>
       <div class="fraca">${c.municipio} · ${dia(c.emitido_em)} · ${c.forma_pagamento || ''}</div>
       ${c.avisos.length ? `<div class="estado ruim" style="margin:.7rem 0">
           ${c.avisos.map((a) => `• ${a}`).join('<br>')}</div>` : ''}
@@ -61,6 +64,18 @@ function desenharCupom(resposta) {
         : ''}
     </div>`;
 }
+
+function desenharCupom(resposta) {
+  $('#cupom-lido').innerHTML = cartaoCupom(resposta.cupom, resposta.novo ? 'novo' : 'já registrado');
+}
+
+/* Abrir um cupom já guardado. Sem isto o histórico é só uma linha com o total —
+   os itens e as quantidades existem no banco e ficavam sem porta na tela. */
+window.verCupom = async (chave) => {
+  const c = await api('/api/cupom/' + chave);
+  $('#cupom-lido').innerHTML = cartaoCupom(c, dia(c.emitido_em));
+  $('#cupom-lido').scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
 
 async function enviar(promessa, textoOcupado) {
   aviso(textoOcupado);
@@ -100,7 +115,7 @@ carregadores.enviar = async () => {
       ${revisao.length} cupom(ns) entraram pela metade e esperam revisão.</div>` : '';
   $('#lista-cupons').innerHTML = cupons.length
     ? cupons.map((c) => `
-        <div class="linha">
+        <div class="linha clicavel" onclick="verCupom('${c.chave}')">
           <div>${c.loja}<div class="fraca">${dia(c.emitido_em)} · ${c.itens} itens · ${c.morador || '—'}</div></div>
           <strong class="num">${dinheiro(c.valor_pago)}</strong>
         </div>`).join('')
@@ -186,7 +201,7 @@ window.verProduto = async (id) => {
   const p = await api('/api/produto/' + id);
   const compras = p.compras.map((c) => `
     <tr><td>${dia(c.data)}<div class="fraca">${c.loja}</div></td>
-        <td class="num">${dinheiro(c.valor_unitario)}<div class="fraca">${c.quantidade} ${c.unidade || ''}</div></td></tr>`).join('');
+        <td class="num">${dinheiro(c.valor_unitario)}<div class="fraca">${quantia(c.quantidade)} ${c.unidade || ''}</div></td></tr>`).join('');
   $('#produto-detalhe').innerHTML = `
     <div class="cartao" style="margin-top:.9rem">
       <div class="linha"><strong>${p.descricao}</strong>
