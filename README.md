@@ -97,11 +97,41 @@ gtin=7891167011779             (40 minutos antes: o atum certo, no LAR, R$ 10,97
   -> total=419, desc "PASEA DE GENTE COLOAT", município "CAYOEINO DE IVAPEQIRIK"
 ```
 
-Os nomes de loja e de município são **corrupções de caractere** de nomes reais, e
-a `desc` é o eco literal da consulta. Por isso:
+### O que é observação e o que é palpite
+
+**Observado**, e reproduzível: HTTP 200, JSON no formato certo, conteúdo falso.
+A `desc` ecoa o termo consultado. Nomes de loja e de município são substituições
+de caractere em nomes reais (`CONDOR SUVER CENTZR LTDA`, `CAMPO VAGRA` por
+Campo Largo, `REWIFE` por Recife). Pedindo raio de 15 km em Medianeira vieram
+estabelecimentos em **ES e PE**. O `ncm` volta com **9 dígitos**, e NCM tem 8.
+Os preços são implausíveis para o produto. As distâncias, essas, são coerentes
+com o raio pedido — o disfarce é cuidadoso nesse campo.
+
+**Não observado: a causa.** Três hipóteses, em ordem do que o material sustenta:
+
+1. **base de homologação servida no lugar da de produção** quando a requisição
+   é recusada — a substituição de caractere em nomes reais é a assinatura
+   clássica de um anonimizador de dados de teste, e explica junto o NCM
+   malformado e as UFs de outros estados;
+2. **backend degradado** — cache ou índice caindo num modo de fallback;
+3. **tarpit deliberado contra raspagem** — possível, mas é a que o material
+   menos sustenta: um fisco estadual devolvendo preço falso enganaria também o
+   app oficial, e um tarpit bem-feito devolveria preços plausíveis em vez de
+   nomes embaralhados que qualquer validação pega.
+
+Para esta app o efeito é o mesmo nas três, então o que importa é validar. Mas
+**a causa não está estabelecida** — não escreva por aí que é anti-raspagem.
+
+Por isso:
 
 - toda resposta passa por `cupomzinho/sanidade.py` **antes** de virar linha no
-  banco. Resposta suspeita não grava nada, entra em backoff longo e sai no log;
+  banco. Resposta suspeita não grava nada, entra em backoff longo e sai no log.
+  Os sinais que se mostraram confiáveis, do mais barato ao mais caro:
+  **canário** (uma consulta com termo inventado antes de cada lote — se ela
+  devolver produtos, o lote inteiro é descartado), `uf` diferente de `PR`,
+  `ncm` que não tenha 8 dígitos, `desc` idêntica em todos os resultados vindos
+  de lojas diferentes, e eco literal do termo consultado. A distância **não**
+  serve: ela vem coerente com o raio pedido mesmo na resposta falsa;
 - `TETO_CONSULTAS_HORA` começa baixo e não deve ser aumentado sem medir de novo;
 - o casamento de produto **nunca** é aproximado. No mesmo cupom convivem
   `ATUM ... RALADO NAT 170G` e `ATUM ... RALADO DEF 170G`, com código de barras
