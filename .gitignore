@@ -1,0 +1,14 @@
+# segredo nunca entra no git — lei da casa nº 9
+.env
+
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# dados locais, quando se roda fora do contêiner
+dados/
+*.db
+*.db-wal
+*.db-shm
