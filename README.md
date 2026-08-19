@@ -78,13 +78,15 @@ primária, e reenvio é o caso comum, não a exceção.
 
 ---
 
-## Sobre a API do Menor Preço: consulta automatizada está fora
+## Menor Preço: consulta sob demanda, com o cliente identificado
 
-**Esta é a seção mais importante do repositório.** O `cupomzinho` **não**
-consulta a API do Menor Preço, e a decisão não é técnica.
+O `cupomzinho` consulta a API pública do Menor Preço **só quando uma pessoa
+pede** — nunca em laço, nunca agendado. As regras abaixo não são estilo, são a
+razão de a coisa ser aceitável.
 
-O Termo de Uso da plataforma (CELEPAR, disponível em
-`menorpreco.notaparana.pr.gov.br/termo`) proíbe expressamente:
+### O que o Termo de Uso proíbe
+
+O Termo (CELEPAR, em `menorpreco.notaparana.pr.gov.br/termo`) é específico:
 
 > "Você se compromete a não utilizar qualquer sistema automatizado, inclusive,
 > mas sem se limitar a 'robôs', 'spiders' ou 'agentes automatizados', que
@@ -96,50 +98,50 @@ O Termo de Uso da plataforma (CELEPAR, disponível em
 > "É vedada também a utilização da Plataforma para aplicações de 'Pricing', ou
 > verificação de preços da concorrência e a utilização abusiva da Plataforma."
 
-> "Coletamos seu IP para fins de controle de acesso e evitar o uso de robôs."
+E a Plataforma destina-se a "fins informativos e de uso próprio, excluindo
+qualquer utilização comercial ou publicitária".
 
-> "A qualquer momento a CELEPAR poderá [...] bloquear, parcial ou
-> definitivamente, a utilização do aplicativo pelo Usuário, seja impedindo o
-> acesso por IP, ASN, CPF, conta do Google ou Facebook."
+Uso doméstico, sob demanda, para decidir onde a casa faz a compra da semana
+cabe nisso. Um vigia de preços rodando de hora em hora não cabe — e foi
+justamente o vigia que a primeira versão do plano previa, por decisão minha e
+não por pedido de ninguém.
 
-### O que foi observado, e por quê
+### As cinco regras
 
-Durante a construção, ~30 consultas em 25 minutos fizeram a API passar a
-responder **HTTP 200 com conteúdo fabricado**: `desc` ecoando o termo
-consultado, nomes de loja e município com caracteres trocados (`CAMPO VAGRA`
-por Campo Largo, `REWIFE` por Recife), `ncm` com 9 dígitos em vez de 8, e
-estabelecimentos em ES e PE dentro de um raio de 15 km em Medianeira. A
-distância, essa, vem coerente com o raio pedido.
+1. **Só disparado por gente.** Nenhuma tarefa de fundo, nenhum agendamento.
+2. **User-Agent honesto**, `cupomzinho/<versão> (uso pessoal...)`. Nunca imitar
+   navegador. A diferença não é de volume, é de honestidade: um cliente que se
+   identifica pode ser reconhecido e barrado pela CELEPAR quando ela quiser —
+   copiar os cabeçalhos do Chrome tira dela essa escolha.
+3. **Uma consulta por vez**, com espera entre elas, e teto por sessão.
+4. **Toda resposta validada** antes de virar linha no banco (ver abaixo).
+5. **Cache no banco.** O preço de ontem responde a pergunta de hoje; não se
+   pergunta duas vezes a mesma coisa.
 
-Levantei três hipóteses para a causa e errei duas vezes: primeiro afirmei
-"anti-raspagem" sem base, depois rebaixei essa hipótese por achar que uma base
-de homologação explicava melhor. O Termo de Uso resolveu a questão — a
-plataforma declara que detecta e barra acesso automatizado. O comportamento é a
-reação anunciada, não um defeito.
+### O modo degradado existe, e é silencioso
+
+Isto foi medido, e é o motivo de a regra 4 não ser opcional.
+
+Enquanto as consultas saíam com o User-Agent padrão do Python
+(`Python-urllib/3.13`), a API respondia **HTTP 200 com uma base de teste**:
+`desc` ecoando o termo consultado, lojas com caracteres trocados
+(`CONDOR SUVER CENTZR LTDA`, `CAMPO VAGRA` por Campo Largo, uma delas prefixada
+`ZTEST`), municípios do Paraná rotulados como PE, `ncm` com 9 dígitos, preços
+implausíveis. As distâncias, essas, vinham coerentes com o raio pedido.
+
+Nunca houve bloqueio: o navegador de um desktop na mesma LAN, no mesmo IP
+público, recebia dado limpo o tempo todo. O discriminador era o User-Agent.
 
 A fixture `tests/fixtures/menor_preco_envenenado_gtin.json` guarda uma dessas
-respostas, como registro do que foi observado.
+respostas. Os sinais que a denunciam, do mais barato ao mais caro:
 
-**Não é bloqueio de IP.** Enquanto o servidor recebia dado fabricado, o
-navegador de um desktop na MESMA LAN — logo, no mesmo IP público — recebia dado
-limpo. O que separa os dois é a assinatura da requisição (User-Agent, Referer,
-Origin, cookies) somada à cadência, não o endereço. O uso normal da casa, pelo
-site e pelo app, nunca esteve comprometido.
-
-Isso torna o contorno tecnicamente fácil, e é exatamente por isso que ele não é
-feito: mandar cabeçalhos de navegador para atravessar a detecção é contornar
-uma medida anti-robô, e o termo proíbe sistema automatizado independentemente
-de como ele se apresenta. A porta estar destrancada não é convite.
-
-### O que se faz no lugar
-
-Comparação de preço entre mercados sai do **histórico da própria casa** — os
-cupons que entram por aqui. É menos abrangente que a base do estado e cobre só
-o que a casa realmente compra, mas é dado próprio, sem depender de ninguém.
-
-Para consultar a região, use o site ou o app oficial, na mão. Se um dia a
-comparação automática valer o esforço, o caminho é pedir acesso autorizado à
-CELEPAR — não contornar o bloqueio.
+| Sinal | Sadio | Degradado |
+|---|---|---|
+| canário (termo inventado) | `total: 0` | dezenas de produtos com aquele nome |
+| `ncm` | 8 dígitos | 9 dígitos |
+| `estabelecimento.uf` | só `PR` | mistura `ES`, `PE` |
+| `desc` distintas num lote | várias | uma só, repetida |
+| `distkm` | coerente | **também coerente — não serve de sinal** |
 
 ## O que o cupom traz (e o que não traz)
 
@@ -242,11 +244,15 @@ escritores em sqlite é o caminho curto para `database is locked`.
 
 ## O que falta
 
-- comparação entre mercados a partir do histórico da própria casa, e aba
-  **Lista de compras** mostrando junto a cobertura — loja barata que só cobre
-  metade da lista não pode ganhar em silêncio;
-- unificação de produto na mão, já que sem o Menor Preço não há GTIN para casar
-  automaticamente descrições de lojas diferentes;
+- unificar produtos na mão, juntando o mesmo item escrito diferente em cada
+  loja — é o gargalo: sem isso nada compara;
+- `sanidade.py` — as cinco validações da tabela acima, com a fixture degradada
+  e uma sadia como teste;
+- `menor_preco.py` — cliente sob demanda, identificado, sequencial e com teto;
+- aba **Lista de compras**: monta a lista a partir do histórico, consulta os
+  preços quando você pede, e mostra qual mercado sai mais barato junto com a
+  cobertura — loja barata que só cobre metade da lista não pode ganhar em
+  silêncio;
 - backup diário do banco (`VACUUM INTO`, guardando 7);
 - OCR do cupom inteiro, para comércio que não emite NFC-e. O lugar está
   reservado: `cupom.origem` já aceita `'foto'` e o Pillow já está na imagem.
