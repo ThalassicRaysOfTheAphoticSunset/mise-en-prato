@@ -65,6 +65,11 @@ def migrar(con: sqlite3.Connection) -> list[str]:
     Migração é arquivo numerado em migracoes/, nunca editado depois de aplicado
     — banco em produção só anda para frente.
     """
+    # Chave estrangeira desligada durante a migração: reconstruir tabela em
+    # sqlite (a única forma de tirar uma constraint de coluna) passa por DROP,
+    # e com FK ligada o DROP derruba ou recusa. É o procedimento que a própria
+    # documentação do sqlite recomenda. Volta a ligar no fim, sempre.
+    con.execute("PRAGMA foreign_keys = OFF")
     con.execute("CREATE TABLE IF NOT EXISTS migracao (nome TEXT PRIMARY KEY, aplicada_em TEXT)")
     ja = {linha["nome"] for linha in con.execute("SELECT nome FROM migracao")}
     aplicadas = []
@@ -77,4 +82,5 @@ def migrar(con: sqlite3.Connection) -> list[str]:
         )
         con.commit()
         aplicadas.append(arquivo.name)
+    con.execute("PRAGMA foreign_keys = ON")
     return aplicadas

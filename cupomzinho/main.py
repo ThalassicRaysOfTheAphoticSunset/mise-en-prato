@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import cupons, relatorios, tarefas
+from . import cupons, relatorios, tarefas, unificacao
 from .banco import conectar
 from .config import config
 from .identidade import NaoIdentificado, quem_e
@@ -256,6 +256,38 @@ async def ver_produto(produto_id: int, _: Morador, con: Banco):
     if not achado:
         raise HTTPException(404, "produto não encontrado")
     return responder(achado)
+
+
+# ── unificar produtos ────────────────────────────────────────────────────────
+class Unir(BaseModel):
+    manter: int
+    juntar: int
+
+
+class Recusa(BaseModel):
+    desc_a: str
+    desc_b: str
+
+
+@app.get("/api/unificar")
+async def ver_candidatos(_: Morador, con: Banco):
+    """Pares que parecem o mesmo produto. SUGESTÃO — nada acontece sozinho."""
+    return responder({"candidatos": unificacao.candidatos(con)})
+
+
+@app.post("/api/unificar")
+async def unir(uniao: Unir, _: Morador, con: Banco):
+    try:
+        return responder(unificacao.unificar(con, uniao.manter, uniao.juntar))
+    except ValueError as erro:
+        raise HTTPException(400, str(erro)) from erro
+
+
+@app.post("/api/unificar/recusar")
+async def recusar_par(recusa: Recusa, _: Morador, con: Banco):
+    """"Não são a mesma coisa" — para o par não voltar a ser sugerido."""
+    unificacao.recusar(con, recusa.desc_a, recusa.desc_b)
+    return responder({"ok": True})
 
 
 # ── a PWA ────────────────────────────────────────────────────────────────────

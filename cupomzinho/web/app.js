@@ -185,8 +185,49 @@ $('#busca').oninput = () => {
   buscaAgendada = setTimeout(carregadores.produtos, 250);
 };
 
+/* Sugestões de unificação. O botão que junta fica à direita e o "não são" à
+   esquerda de propósito: juntar é a ação destrutiva, e não deve ser a que o
+   polegar acerta sem querer. */
+async function desenharUnificacao() {
+  const { candidatos } = await api('/api/unificar');
+  $('#unificar').innerHTML = !candidatos.length ? '' : `
+    <h2>Parecem o mesmo produto</h2>
+    <div class="lista">${candidatos.map((c) => `
+      <div>
+        <div><strong>${c.manter.descricao}</strong></div>
+        <div><strong>${c.juntar.descricao}</strong></div>
+        <div class="fraca" style="margin:.3rem 0 .6rem">${c.motivo}</div>
+        <div style="display:flex;gap:.5rem;justify-content:space-between">
+          <button class="acao" style="background:transparent;color:var(--fraca);
+            border:1px solid var(--borda)"
+            onclick="recusarPar(${JSON.stringify(c.manter.descricao).replace(/"/g, '&quot;')},
+                                ${JSON.stringify(c.juntar.descricao).replace(/"/g, '&quot;')})">
+            não são</button>
+          <button class="acao" onclick="unirPar(${c.manter.id}, ${c.juntar.id})">
+            juntar em “${c.manter.descricao.slice(0, 22)}”</button>
+        </div>
+      </div>`).join('')}</div>`;
+}
+
+window.unirPar = async (manter, juntar) => {
+  await api('/api/unificar', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ manter, juntar }),
+  });
+  carregadores.produtos();
+};
+
+window.recusarPar = async (desc_a, desc_b) => {
+  await api('/api/unificar/recusar', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ desc_a, desc_b }),
+  });
+  carregadores.produtos();
+};
+
 carregadores.produtos = async () => {
   $('#produto-detalhe').innerHTML = '';
+  desenharUnificacao();
   const { produtos } = await api('/api/produtos?busca=' + encodeURIComponent($('#busca').value));
   $('#lista-produtos').innerHTML = produtos.length
     ? produtos.map((p) => `
