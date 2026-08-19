@@ -29,9 +29,16 @@ class Config(BaseSettings):
     # A API satura em ~7 dias de janela e PENDURA A CONEXÃO com data=30.
     # Medido na sondagem; não aumentar sem testar de novo.
     dias_janela: int = 7
-    # Teto deliberadamente baixo: ~30 consultas em 25 minutos foram suficientes
-    # para a API começar a devolver dado fabricado com HTTP 200. Ver sanidade.py.
-    teto_consultas_hora: int = 20
+    # Teto por hora. 50 dá uma consulta a cada ~72 segundos, que é ritmo de
+    # gente pesquisando uma compra grande no app oficial — dentro do que o
+    # termo de uso descreve como humanamente possível num navegador.
+    #
+    # O que derrubou a API na construção não foi o volume por hora e sim a
+    # assinatura da requisição: com o User-Agent padrão do Python ela servia
+    # base de teste já nas primeiras dezenas de consultas; com o cliente
+    # identificado, dado limpo. Mesmo assim o teto fica, porque é ele que
+    # impede a app de virar o robô que o termo proíbe.
+    teto_consultas_hora: int = 50
 
     # ── quem é morador ───────────────────────────────────────────────────────
     # "login_tailscale=Nome,login_tailscale=Nome". Sem senha nova: quem diz o

@@ -113,7 +113,8 @@ não por pedido de ninguém.
    navegador. A diferença não é de volume, é de honestidade: um cliente que se
    identifica pode ser reconhecido e barrado pela CELEPAR quando ela quiser —
    copiar os cabeçalhos do Chrome tira dela essa escolha.
-3. **Uma consulta por vez**, com espera entre elas, e teto por sessão.
+3. **Uma consulta por vez**, com espera entre elas, e teto por hora (50 por
+   padrão: uma a cada ~72 segundos, ritmo de gente).
 4. **Toda resposta validada** antes de virar linha no banco (ver abaixo).
 5. **Cache no banco.** O preço de ontem responde a pergunta de hoje; não se
    pergunta duas vezes a mesma coisa.

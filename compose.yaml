@@ -38,10 +38,10 @@ services:
       # LOCAL é o centro da busca no Menor Preço, "lat,lon" — Medianeira.
       - LOCAL=${LOCAL:--25.2947,-54.0940}
       - RAIO_KM=${RAIO_KM:-15}
-      # Teto baixo de propósito: ~30 consultas em 25 minutos foram suficientes
-      # para a API do estado começar a devolver dado FABRICADO com HTTP 200.
-      # Ver o detector em cupomzinho/sanidade.py e o README.
-      - TETO_CONSULTAS_HORA=${TETO_CONSULTAS_HORA:-20}
+      # Teto por hora: ~72 segundos entre consultas, ritmo de gente. Ele não
+      # está aqui por causa de cota do estado — está para a app não virar o
+      # robô que o termo de uso proíbe. Ver cupomzinho/sanidade.py e o README.
+      - TETO_CONSULTAS_HORA=${TETO_CONSULTAS_HORA:-50}
       - MORADORES=${MORADORES}
     volumes:
       # O banco, o HTML cru de cada cupom e os backups.
