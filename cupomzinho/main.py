@@ -23,7 +23,15 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import cupons, listas, menor_preco, relatorios, tarefas, unificacao
+from . import (
+    cupons,
+    enriquecimento,
+    listas,
+    menor_preco,
+    relatorios,
+    tarefas,
+    unificacao,
+)
 from .banco import conectar
 from .config import config
 from .identidade import NaoIdentificado, quem_e
@@ -365,6 +373,46 @@ def pesquisar_precos(lista_id: int, request: Request):
         relatorio["guardados"] += menor_preco.guardar(con, item["produto_id"], achados)
 
     relatorio["comparacao"] = listas.comparar(con, lista_id)
+    return responder(relatorio)
+
+
+# ── descobrir código de barras ───────────────────────────────────────────────
+@app.get("/api/enriquecer")
+async def ver_pendentes(_: Morador, con: Banco):
+    return responder({"pendentes": enriquecimento.pendentes(con)})
+
+
+# Síncrona pelo mesmo motivo da pesquisa de preços: o cliente espaça as
+# consultas com sleep, e num handler async isso travaria o laço de eventos.
+@app.post("/api/enriquecer")
+def enriquecer_produtos(request: Request, quantos: int = 5):
+    """Descobre o código de barras dos produtos mais comprados. **A pedido.**
+
+    `quantos` é baixo de propósito: cada produto custa uma consulta, e o teto
+    por hora é o que mantém esta app do lado certo do termo de uso.
+    """
+    con = request.app.state.con
+    cliente = menor_preco.MenorPreco(con)
+    if not cliente.canario():
+        raise HTTPException(
+            503, "a API do Menor Preço está devolvendo base de teste agora — "
+                 "nada foi gravado. Tente mais tarde.")
+
+    relatorio = {"identificados": [], "sem_certeza": []}
+    for pendente in enriquecimento.pendentes(con, quantos):
+        try:
+            r = enriquecimento.enriquecer(con, cliente, pendente["produto_id"])
+        except menor_preco.TetoAtingido as erro:
+            relatorio["teto"] = str(erro)
+            break
+        except menor_preco.RespostaSuspeita as erro:
+            relatorio["sem_certeza"].append(
+                {"descricao": pendente["descricao"], "motivo": f"resposta recusada: {erro}"})
+            continue
+        alvo = "identificados" if r["novo"] else "sem_certeza"
+        relatorio[alvo].append({"descricao": r["descricao"], "gtin": r.get("gtin"),
+                                "motivo": r["motivo"]})
+    relatorio["restantes"] = len(enriquecimento.pendentes(con, 999))
     return responder(relatorio)
 
 

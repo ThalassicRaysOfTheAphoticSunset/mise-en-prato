@@ -225,8 +225,42 @@ window.recusarPar = async (desc_a, desc_b) => {
   carregadores.produtos();
 };
 
+async function desenharEnriquecimento() {
+  const { pendentes } = await api('/api/enriquecer');
+  $('#enriquecer').innerHTML = !pendentes.length ? '' : `
+    <div class="cartao">
+      <div class="linha"><strong>${pendentes.length} produtos sem código de barras</strong></div>
+      <div class="fraca" style="margin:.3rem 0 .6rem">Sem ele, o mesmo item escrito
+        diferente em cada loja não se reconhece. Consultar o Menor Preço identifica
+        os mais comprados — uma consulta por produto, só quando você pedir.</div>
+      <button class="acao" onclick="descobrirCodigos()">Descobrir os 5 mais comprados</button>
+      <div id="enriquecer-estado"></div>
+    </div>`;
+}
+
+window.descobrirCodigos = async () => {
+  const caixa = $('#enriquecer-estado');
+  caixa.innerHTML = '<div class="estado">Consultando, um produto por vez…</div>';
+  try {
+    const r = await api('/api/enriquecer?quantos=5', { method: 'POST' });
+    caixa.innerHTML = `
+      <div class="estado">
+        ${r.identificados.length} identificados${r.teto ? ` · ${r.teto}` : ''}
+        · ${r.restantes} ainda sem código
+      </div>
+      ${r.identificados.map((p) => `<div class="linha"><span>${p.descricao}</span>
+        <span class="selo">${p.gtin}</span></div>`).join('')}
+      ${r.sem_certeza.map((p) => `<div class="linha fraca"><span>${p.descricao}</span>
+        <span>${p.motivo}</span></div>`).join('')}`;
+    desenharUnificacao();
+  } catch (erro) {
+    caixa.innerHTML = `<div class="estado ruim">${erro.message}</div>`;
+  }
+};
+
 carregadores.produtos = async () => {
   $('#produto-detalhe').innerHTML = '';
+  desenharEnriquecimento();
   desenharUnificacao();
   const { produtos } = await api('/api/produtos?busca=' + encodeURIComponent($('#busca').value));
   $('#lista-produtos').innerHTML = produtos.length

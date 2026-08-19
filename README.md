@@ -263,15 +263,9 @@ escritores em sqlite é o caminho curto para `database is locked`.
 
 ## O que falta
 
-- unificar produtos na mão, juntando o mesmo item escrito diferente em cada
-  loja — é o gargalo: sem isso nada compara;
-- `sanidade.py` — as cinco validações da tabela acima, com a fixture degradada
-  e uma sadia como teste;
-- `menor_preco.py` — cliente sob demanda, identificado, sequencial e com teto;
-- aba **Lista de compras**: monta a lista a partir do histórico, consulta os
-  preços quando você pede, e mostra qual mercado sai mais barato junto com a
-  cobertura — loja barata que só cobre metade da lista não pode ganhar em
-  silêncio;
-- backup diário do banco (`VACUUM INTO`, guardando 7);
-- OCR do cupom inteiro, para comércio que não emite NFC-e. O lugar está
+- **OCR do cupom inteiro**, para comércio que não emite NFC-e. O lugar está
   reservado: `cupom.origem` já aceita `'foto'` e o Pillow já está na imagem.
+- Ajustar quantidade do item direto na lista (hoje entra 1 e edita-se pela API).
+- Produto a granel (`CEBOLA NACIONAL KG`) nunca terá código de barras. A fila de
+  enriquecimento já os manda para o fim depois da primeira tentativa, mas dava
+  para reconhecê-los pela unidade e nem perguntar.
