@@ -16,6 +16,9 @@ dependencies = [
     "pydantic-settings>=2.7",
     "python-multipart>=0.0.20",  # o FastAPI exige para receber a foto do QR
     "pyzbar>=0.1.9",
+    # a segunda opinião sobre o QR: lê cupom manchado que o zbar recusa (qr.py).
+    # Wheel manylinux, sem pacote apt atrás — ao contrário do libzbar0.
+    "zxing-cpp>=2.2",
     "pillow>=11",
 ]
 

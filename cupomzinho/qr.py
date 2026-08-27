@@ -21,12 +21,42 @@ Medido contra a foto real que falhou (3024x4032, cupom térmico gasto):
 Ou seja: o conserto é reduzir, e desfocar ANTES de reduzir amplia muito a
 margem — o desfoque dissolve o chapisco antes que a redução o transforme em
 ruído. É o que a escada abaixo faz, varrendo escalas da maior para a menor.
+
+A escada, porém, não é tudo: o decodificador também conta. Medido em 27/08/2026
+contra as três fotos que falharam de verdade (`dados/falhas/`):
+
+    escada + zbar ............................. 0 de 3
+    escada + zxing-cpp ........................ 1 de 3 (em "reduzida 450")
+    varredura fina, 840 combinações por foto
+    (escala 900→220 de 20 em 20, três desfoques,
+     cru/contraste/equalizado/binário, os dois
+     decodificadores) ......................... as outras 2, nada
+
+O zbar e o zxing binarizam e corrigem erro de jeitos diferentes, e o segundo lê
+o que o primeiro desiste de ler. MEDIDO e não reproduzível em laboratório: umas
+200 degradações sintéticas (ruído, tinta borrada, sombra, foto torta, em várias
+escalas) não acharam UM caso em que o zbar falhe e o zxing salve — a diferença
+só apareceu na foto de verdade. Os testes, portanto, provam que o zxing lê
+sozinho, não que ele lê melhor; quem prova isso é a foto de 19/08.
+
+Manter os dois sai barato porque o caro aqui é transformar a imagem, não
+decodificá-la — por isso cada variante da escada passa pelos dois antes de a
+próxima ser gerada.
+
+E as duas fotos que resistiram às 840 tentativas não são defeito de
+decodificador: aquele QR está fisicamente perdido. Para elas o caminho é outro,
+digitar a chave de acesso que continua impressa no papel — `consulta_chave.py`.
 """
 import logging
 from io import BytesIO
 
 from PIL import Image, ImageFilter, ImageOps
 from pyzbar.pyzbar import ZBarSymbol, decode
+
+try:
+    import zxingcpp
+except ImportError:  # a wheel some, o app continua de pé com o zbar sozinho
+    zxingcpp = None
 
 log = logging.getLogger("cupomzinho.qr")
 
@@ -91,6 +121,21 @@ def _tentativas(imagem: Image.Image):
     yield "com margem", ImageOps.expand(alvo, border=MARGEM, fill=255)
 
 
+def _por_zbar(imagem: Image.Image) -> list[str]:
+    return [c.data.decode("utf-8", "replace")
+            for c in decode(imagem, symbols=[ZBarSymbol.QRCODE])]
+
+
+def _por_zxing(imagem: Image.Image) -> list[str]:
+    return [r.text for r in zxingcpp.read_barcodes(
+        imagem, formats=zxingcpp.BarcodeFormat.QRCode)]
+
+
+# Na ordem em que são tentados. O zbar primeiro porque é o que já resolvia o
+# caso comum; o zxing é a segunda opinião, e é ele quem salva cupom manchado.
+DECODIFICADORES = [("zbar", _por_zbar)] + ([("zxing", _por_zxing)] if zxingcpp else [])
+
+
 def ler_qr(dados: bytes) -> list[str]:
     """Todo conteúdo de QR Code achado na imagem. Lista vazia se não achou nada.
 
@@ -106,11 +151,46 @@ def ler_qr(dados: bytes) -> list[str]:
              imagem.format, imagem.width, imagem.height, len(dados) // 1024)
 
     for nome, variante in _tentativas(imagem):
-        achados = decode(variante, symbols=[ZBarSymbol.QRCODE])
-        if achados:
-            log.info("QR achado na tentativa '%s' (%d código(s))", nome, len(achados))
-            return [c.data.decode("utf-8", "replace") for c in achados]
+        for decodificador, ler in DECODIFICADORES:
+            achados = ler(variante)
+            if achados:
+                log.info("QR achado por %s na tentativa '%s' (%d código(s))",
+                         decodificador, nome, len(achados))
+                return achados
         log.debug("tentativa '%s': nada", nome)
 
     log.info("nenhum QR Code em nenhuma das tentativas")
     return []
+
+
+def _main(argv: list[str]) -> int:
+    """Triagem das fotos que falharam: `python -m cupomzinho.qr foto.jpg pasta/`.
+
+    Existe para responder "esse QR ainda é legível?" sem subir nada — é com ele
+    que a tabela de medições do topo deste arquivo foi levantada.
+    """
+    import pathlib
+
+    if not argv:
+        print(__doc__.splitlines()[0])
+        print("uso: python -m cupomzinho.qr <foto.jpg|pasta> [...]")
+        return 2
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    fotos = []
+    for bruto in argv:
+        caminho = pathlib.Path(bruto)
+        fotos.extend(sorted(caminho.glob("*.jpg")) if caminho.is_dir() else [caminho])
+
+    perdidas = 0
+    for foto in fotos:
+        achados = ler_qr(foto.read_bytes())
+        print(f"{foto.name}: {achados[0] if achados else 'ILEGÍVEL — resta a chave no papel'}")
+        perdidas += not achados
+    return 1 if perdidas else 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    raise SystemExit(_main(sys.argv[1:]))

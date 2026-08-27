@@ -122,3 +122,34 @@ def test_foto_de_celular_com_chapisco_de_impressao_termica():
 @pytest.mark.parametrize("escala,sigma", [(4, 60), (6, 90), (8, 120)])
 def test_chapisco_em_varias_intensidades(escala, sigma):
     assert ler_qr(_bytes(_chapiscado(escala, sigma).convert("RGB"))) == [URL_QR]
+
+
+# ── os dois decodificadores ──────────────────────────────────────────────────
+def _so(nomes: set[str]):
+    """A escada com só alguns decodificadores ligados, para isolar cada um."""
+    import cupomzinho.qr as modulo
+
+    return [d for d in modulo.DECODIFICADORES if d[0] in nomes]
+
+
+def test_o_zxing_le_sozinho(monkeypatch):
+    """A segunda opinião é opinião de verdade, não enfeite.
+
+    Não há teste aqui provando que ele lê MELHOR: umas 200 degradações
+    sintéticas não acharam um caso em que o zbar falhe e o zxing salve. A
+    diferença apareceu na foto real de 19/08/2026, que não entra no repo porque
+    tem a chave de acesso legível no papel. O que dá para travar é isto: o
+    caminho do zxing funciona de ponta a ponta.
+    """
+    import cupomzinho.qr as modulo
+
+    monkeypatch.setattr(modulo, "DECODIFICADORES", _so({"zxing"}))
+    assert ler_qr(_bytes(_qr())) == [URL_QR]
+
+
+def test_sem_o_zxing_a_escada_continua_de_pé(monkeypatch):
+    """A wheel pode faltar (o import é guardado) e o app não pode cair por isso."""
+    import cupomzinho.qr as modulo
+
+    monkeypatch.setattr(modulo, "DECODIFICADORES", _so({"zbar"}))
+    assert ler_qr(_bytes(_qr())) == [URL_QR]
