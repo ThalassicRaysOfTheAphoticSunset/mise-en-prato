@@ -45,6 +45,38 @@
       </form>
     </details>
 
+    <details class="alternativa" id="alt-chave">
+      <summary>ou digitar a chave de acesso (QR estragado)</summary>
+      <p class="dica">São os 44 números impressos logo acima do QR, em grupos de
+        quatro. O portal do estado pede que você leia um captcha — é ele que
+        prova que tem gente deste lado, e não um robô.</p>
+      <form id="form-chave">
+        <input id="chave" type="text" inputmode="numeric" autocomplete="off"
+               placeholder="4126 0877 7522 9301 6191 …" required>
+        <div id="captcha-caixa" hidden>
+          <img id="captcha-img" alt="as letras que o portal da Fazenda está pedindo"
+               width="180" height="60">
+          <button type="button" id="captcha-outro" class="acao">outra imagem</button>
+          <input id="captcha" type="text" inputmode="text" autocomplete="off"
+                 placeholder="as letras da imagem" required>
+        </div>
+        <button type="submit">Consultar pela chave</button>
+      </form>
+
+      <details class="alternativa">
+        <summary>não deu certo? registrar só o gasto</summary>
+        <p class="dica">Usa a chave digitada acima. Entra sem os itens e fica na
+          fila de revisão, para reconsultar quando o portal ajudar — o gasto do
+          mês não fica furado.</p>
+        <form id="form-manual">
+          <input id="manual-total" type="text" inputmode="decimal"
+                 placeholder="total do cupom, 106,74" required>
+          <input id="manual-data" type="date" required>
+          <button type="submit">Registrar o gasto</button>
+        </form>
+      </details>
+    </details>
+
     <div id="envio-estado" class="estado" hidden></div>
     <div id="cupom-lido"></div>
 

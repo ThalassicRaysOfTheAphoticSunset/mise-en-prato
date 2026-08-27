@@ -96,10 +96,16 @@ def test_reenvio_por_chave_ja_guardada(cliente):
     assert r.status_code == 200 and r.json()["novo"] is False
 
 
-def test_chave_desconhecida_explica_que_precisa_do_link(cliente):
+def test_chave_desconhecida_manda_para_a_consulta_completa(cliente):
+    """A chave sozinha não consulta a rota do QR — mas não é mais fim de linha.
+
+    O hash de segurança continua sendo exigido lá; quem entra só com a chave
+    entra pela consulta completa do portal, que cobra captcha.
+    """
     r = cliente.post("/api/cupom", json={"chave": "1" * 44})
     assert r.status_code == 404
     assert "hash de segurança" in r.json()["detail"]
+    assert "/api/cupom/chave" in r.json()["detail"]
 
 
 def test_link_sem_chave_e_recusado(cliente):
@@ -142,3 +148,158 @@ def test_teto_de_consultas_vira_429_e_nao_500(cliente, monkeypatch):
     assert "Libera às" in resposta.json()["detail"]
 
     assert cliente.post("/api/enriquecer?quantos=1").status_code == 429
+
+
+# ── entrar pela chave, com o QR perdido ──────────────────────────────────────
+# A chave da fixture com o dígito verificador refeito para fechar: é cupom
+# inventado, com a forma do verdadeiro.
+CHAVE_NOVA = "41260876430438011297650100001622251010241380"
+
+
+def _com_dv(chave: str) -> str:
+    from cupomzinho.nfce_pr import digito_verificador
+
+    return chave[:43] + digito_verificador(chave)
+
+
+def _desafio_falso():
+    from cupomzinho.consulta_chave import Desafio
+
+    return Desafio(id="desafio-de-teste", url="https://exemplo.invalido/consulta",
+                   campos={}, cookies={}, imagem=b"imagem-de-mentira")
+
+
+@pytest.fixture
+def portal(monkeypatch):
+    """O portal do estado, dublado. Nenhum teste daqui toca a rede."""
+    from cupomzinho import main
+
+    chamadas = []
+    monkeypatch.setattr(main, "abrir_desafio", _desafio_falso)
+
+    def consultar(desafio, chave, captcha):
+        chamadas.append((chave, captcha))
+        if captcha != "certo":
+            from cupomzinho.consulta_chave import CaptchaRecusado
+            raise CaptchaRecusado("nao")
+        return FIXTURE.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(main, "consultar", consultar)
+    return chamadas
+
+
+def _pegar_desafio(cliente):
+    return cliente.get("/api/chave/desafio").json()["desafio"]
+
+
+def test_desafio_traz_a_imagem_do_captcha(cliente, portal):
+    corpo = cliente.get("/api/chave/desafio").json()
+    assert corpo["imagem"].startswith("data:image/")
+    assert corpo["desafio"]
+
+
+def test_chave_digitada_traz_o_cupom_inteiro(cliente, portal):
+    """O caminho que salva cupom de QR manchado: 44 dígitos + captcha."""
+    chave = _com_dv(CHAVE_NOVA)
+    r = cliente.post("/api/cupom/chave", json={
+        "chave": chave, "desafio": _pegar_desafio(cliente), "captcha": "certo"})
+    assert r.status_code == 200, r.text
+    corpo = r.json()
+    assert corpo["novo"] is True
+    assert len(corpo["cupom"]["itens"]) == 16       # a fixture inteira, item a item
+    assert portal == [(chave, "certo")]
+
+
+def test_chave_aceita_os_espacos_do_papel(cliente, portal):
+    """No cupom a chave vem em grupos de quatro. Ninguém vai juntá-los na mão."""
+    chave = _com_dv(CHAVE_NOVA)
+    espacada = " ".join(chave[i:i + 4] for i in range(0, 44, 4))
+    r = cliente.post("/api/cupom/chave", json={
+        "chave": espacada, "desafio": _pegar_desafio(cliente), "captcha": "certo"})
+    assert r.status_code == 200 and portal == [(chave, "certo")]
+
+
+def test_digito_trocado_nem_chega_no_portal(cliente, portal):
+    """Recusar antes de consultar é o que poupa o captcha de quem errou um número."""
+    ruim = _com_dv(CHAVE_NOVA)[:43] + "9" if _com_dv(CHAVE_NOVA)[43] != "9" else \
+        _com_dv(CHAVE_NOVA)[:43] + "8"
+    r = cliente.post("/api/cupom/chave", json={
+        "chave": ruim, "desafio": _pegar_desafio(cliente), "captcha": "certo"})
+    assert r.status_code == 400
+    assert "dígito verificador" in r.json()["detail"]
+    assert portal == []
+
+
+def test_captcha_errado_explica_e_nao_grava(cliente, portal):
+    r = cliente.post("/api/cupom/chave", json={
+        "chave": _com_dv(CHAVE_NOVA), "desafio": _pegar_desafio(cliente), "captcha": "errado"})
+    assert r.status_code == 422 and "captcha" in r.json()["detail"]
+    assert cliente.get("/api/cupom/" + _com_dv(CHAVE_NOVA)).status_code == 404
+
+
+def test_captcha_usado_nao_serve_duas_vezes(cliente, portal):
+    """O `sid` já gasto não volta: erro rende desafio novo, nunca o mesmo."""
+    desafio = _pegar_desafio(cliente)
+    cliente.post("/api/cupom/chave", json={
+        "chave": _com_dv(CHAVE_NOVA), "desafio": desafio, "captcha": "errado"})
+    r = cliente.post("/api/cupom/chave", json={
+        "chave": _com_dv(CHAVE_NOVA), "desafio": desafio, "captcha": "certo"})
+    assert r.status_code == 410
+
+
+def test_cupom_ja_guardado_nao_gasta_captcha(cliente, portal):
+    """Reenviar chave já guardada não pede nada ao portal — nem captcha, nem consulta."""
+    chave = _com_dv(CHAVE_NOVA)
+    cliente.post("/api/cupom/chave", json={
+        "chave": chave, "desafio": _pegar_desafio(cliente), "captcha": "certo"})
+    portal.clear()
+
+    r = cliente.post("/api/cupom/chave", json={
+        "chave": chave, "desafio": "nem-existe", "captcha": "nem-precisa"})
+    assert r.status_code == 200 and r.json()["novo"] is False
+    assert portal == []
+
+
+# ── a rede de segurança: só a chave e o total ────────────────────────────────
+def test_manual_registra_o_gasto_e_pede_revisao(cliente):
+    chave = _com_dv(CHAVE_NOVA)
+    r = cliente.post("/api/cupom/manual", json={
+        "chave": chave, "total": "106,74", "emitido_em": "2026-08-24"})
+    assert r.status_code == 200, r.text
+    cupom = r.json()["cupom"]
+    assert cupom["valor_pago"] == "106.74"          # string, não float
+    assert cupom["itens"] == []
+    assert cupom["avisos"]                          # entra na fila de revisão
+    assert cliente.get("/api/cupons").json()["revisao"]
+
+
+def test_manual_tira_a_loja_da_propria_chave(cliente):
+    """O CNPJ mora dentro da chave — a loja não fica anônima nem sem consulta."""
+    r = cliente.post("/api/cupom/manual", json={
+        "chave": _com_dv(CHAVE_NOVA), "total": "10", "emitido_em": "2026-08-24"})
+    assert r.json()["cupom"]["loja"] == "CNPJ 76.430.438/0112-97"
+
+
+def test_manual_nao_rebatiza_loja_conhecida(cliente):
+    """A LAR já está no banco pelo cupom da fixture, e o nome dela não se perde.
+
+    `_garantir_estabelecimento` sobrescreve a razão social; sem o cuidado, um
+    cupom digitado renomearia o mercado inteiro para "CNPJ ...".
+    """
+    chave = _com_dv("41260877752293016191651170009999991010241380")
+    cliente.post("/api/cupom/manual",
+                 json={"chave": chave, "total": "10", "emitido_em": "2026-08-24"})
+    assert cliente.get("/api/cupom/" + chave).json()["loja"] == "LAR COOPERATIVA AGROINDUSTRIAL"
+
+
+def test_manual_recusa_data_de_outro_mes(cliente):
+    """Gasto no mês errado é pior que cupom faltando — e a chave sabe o mês."""
+    r = cliente.post("/api/cupom/manual", json={
+        "chave": _com_dv(CHAVE_NOVA), "total": "10", "emitido_em": "2026-07-24"})
+    assert r.status_code == 400 and "08/2026" in r.json()["detail"]
+
+
+def test_manual_recusa_total_que_nao_e_numero(cliente):
+    r = cliente.post("/api/cupom/manual", json={
+        "chave": _com_dv(CHAVE_NOVA), "total": "", "emitido_em": "2026-08-24"})
+    assert r.status_code == 400

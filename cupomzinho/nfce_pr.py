@@ -30,6 +30,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from itertools import cycle
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -95,7 +96,7 @@ def _limpar(texto: str) -> str:
     return re.sub(r"\s+", " ", texto or "").strip()
 
 
-def _dinheiro(texto: str) -> Decimal | None:
+def dinheiro(texto: str) -> Decimal | None:
     """"1.234,56" -> Decimal("1234.56"). Devolve None se não houver número."""
     achado = re.search(r"-?[\d.]*\d(?:,\d+)?", texto or "")
     if not achado:
@@ -133,6 +134,50 @@ def chave_da_url(url: str) -> str | None:
         bruto = p.split("|")[0]
     so_digitos = re.sub(r"\D", "", bruto)
     return so_digitos if len(so_digitos) == 44 else None
+
+
+def digito_verificador(chave: str) -> str:
+    """O 44º dígito, calculado sobre os 43 primeiros: módulo 11, pesos 2..9."""
+    soma = 0
+    for peso, digito in zip(cycle(range(2, 10)), reversed(chave[:43]), strict=False):
+        soma += peso * int(digito)
+    resto = soma % 11
+    return "0" if resto in (0, 1) else str(11 - resto)
+
+
+def validar_chave(chave: str) -> bool:
+    """A chave se confere sozinha — e é isso que salva quem digita 44 números.
+
+    Vale a pena checar ANTES de bater no portal: dígito trocado é o erro comum
+    de quem copia do papel, e descobrir isso de graça poupa um captcha.
+    """
+    return len(chave) == 44 and chave.isdigit() and chave[43] == digito_verificador(chave)
+
+
+def dados_da_chave(chave: str) -> dict:
+    """O que a própria chave já conta, sem consultar ninguém.
+
+    Os 44 dígitos são posicionais (layout da NF-e): serve para preencher loja,
+    mês e número de um cupom que entrou sem itens, e para conferir se a data
+    digitada bate com o mês da compra.
+    """
+    return {
+        "uf": chave[0:2],
+        "ano": 2000 + int(chave[2:4]),
+        "mes": int(chave[4:6]),
+        "cnpj": chave[6:20],
+        "modelo": chave[20:22],
+        "serie": chave[22:25].lstrip("0") or "0",
+        "numero": chave[25:34].lstrip("0") or "0",
+        "tipo_emissao": chave[34],
+        "codigo": chave[35:43],
+        "dv": chave[43],
+    }
+
+
+def cnpj_formatado(cnpj: str) -> str:
+    return f"{cnpj[:2]}.{cnpj[2:5]}.{cnpj[5:8]}/{cnpj[8:12]}-{cnpj[12:]}" if len(
+        cnpj) == 14 else cnpj
 
 
 # ── a leitura ────────────────────────────────────────────────────────────────
@@ -190,10 +235,10 @@ def _ler_itens(sopa, avisos: list[str]) -> list[Item]:
     for seq, tr in enumerate(linhas, start=1):
         descricao = _campo(tr, "txtTit2")
         codigo = re.sub(r"\D", "", _campo(tr, "RCod"))            # "(Código: 456641)"
-        quantidade = _dinheiro(_campo(tr, "Rqtd", "Qtde.:"))      # fracionária em item por peso
+        quantidade = dinheiro(_campo(tr, "Rqtd", "Qtde.:"))      # fracionária em item por peso
         unidade = _campo(tr, "RUN", "UN:")
-        unitario = _dinheiro(_campo(tr, "RvlUnit", "Vl. Unit.:"))
-        total = _dinheiro(_campo(tr, "valor"))
+        unitario = dinheiro(_campo(tr, "RvlUnit", "Vl. Unit.:"))
+        total = dinheiro(_campo(tr, "valor"))
 
         if descricao and quantidade is not None and unitario is not None and total is not None:
             itens.append(Item(seq, descricao, codigo, quantidade, unidade, unitario, total))
@@ -241,15 +286,15 @@ def _ler_totais(sopa, cupom: Cupom) -> None:
         if pagamento_comecou:
             if "tributos" in chave_rotulo:      # a linha da Lei 12.741 não é pagamento
                 continue
-            pago = _dinheiro(valor.get_text())
+            pago = dinheiro(valor.get_text())
             if pago is not None:
                 formas.append((_limpar(rotulo.get_text()), pago))
         elif chave_rotulo in rotulos:
             campo = rotulos[chave_rotulo]
             if campo == "qtd_itens":
-                cupom.qtd_itens = int(_dinheiro(valor.get_text()) or 0)
+                cupom.qtd_itens = int(dinheiro(valor.get_text()) or 0)
             else:
-                setattr(cupom, campo, _dinheiro(valor.get_text()) or Decimal("0"))
+                setattr(cupom, campo, dinheiro(valor.get_text()) or Decimal("0"))
 
     cupom.forma_pagamento = " + ".join(nome for nome, _ in formas)
 

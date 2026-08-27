@@ -14,7 +14,7 @@ import sqlite3
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated
 
@@ -34,8 +34,28 @@ from . import (
 )
 from .banco import conectar
 from .config import config
+from .consulta_chave import (
+    CaptchaRecusado,
+    ChaveNaoAchada,
+    Desafio,
+    LayoutDesconhecido,
+    PortalMudou,
+    abrir_desafio,
+    consultar,
+    interpretar_resposta,
+)
 from .identidade import NaoIdentificado, quem_e
-from .nfce_pr import buscar, chave_da_url, interpretar
+from .nfce_pr import (
+    Cupom,
+    Estabelecimento,
+    buscar,
+    chave_da_url,
+    cnpj_formatado,
+    dados_da_chave,
+    dinheiro,
+    interpretar,
+    validar_chave,
+)
 from .qr import ler_qr
 
 WEB = Path(__file__).parent / "web"
@@ -156,31 +176,58 @@ class EnvioCupom(BaseModel):
     chave: str = ""    # só serve para reconsultar cupom já guardado
 
 
+def _guardar_html(chave: str, html: str) -> None:
+    """O HTML cru é gravado ANTES de interpretar.
+
+    Quando o portal mexer no layout, o reprocessamento roda em cima disto e
+    nenhum cupom se perde. Vale para as duas portas: a do QR e a da chave.
+    """
+    (config().pasta_cupons / f"{chave}.html").write_text(html, encoding="utf-8")
+
+
+def _gravar(con, chave: str, cupom, quem: str, origem: str, url_qr: str = "") -> dict:
+    """Grava o cupom já interpretado, mandando a chave informada prevalecer."""
+    if cupom.chave != chave:
+        cupom.avisos.append(
+            f"a chave da página ({cupom.chave}) difere da chave informada ({chave})")
+        cupom.chave = chave
+    cupons.gravar(con, cupom, morador=quem, origem=origem, url_qr=url_qr)
+    return {"novo": True, "cupom": cupons.ler(con, chave)}
+
+
+def _ja_guardado(con, chave: str) -> dict | None:
+    guardado = cupons.ler(con, chave) if cupons.existe(con, chave) else None
+    return {"novo": False, "cupom": guardado} if guardado else None
+
+
+def _chave_valida(bruta: str) -> str:
+    """A chave normalizada, ou 400 explicando qual das duas coisas deu errado."""
+    chave = chave_da_url(bruta)
+    if not chave:
+        raise HTTPException(400, "isso não tem 44 dígitos. A chave de acesso está impressa "
+                                 "no cupom, em grupos de quatro, logo acima do QR Code.")
+    if not validar_chave(chave):
+        raise HTTPException(400, "o dígito verificador não fecha — algum número saiu trocado. "
+                                 "Confira os 44 dígitos no papel e mande de novo.")
+    return chave
+
+
 def _registrar(con, url: str, quem: str, origem: str) -> dict:
-    """Busca, interpreta e grava. Idempotente pela chave de acesso."""
+    """Busca pela URL do QR, interpreta e grava. Idempotente pela chave."""
     chave = chave_da_url(url)
     if not chave:
         raise HTTPException(400, "não encontrei uma chave de acesso de 44 dígitos nesse link")
 
-    if cupons.existe(con, chave):
-        guardado = cupons.ler(con, chave)
-        return {"novo": False, "cupom": guardado}
+    if (guardado := _ja_guardado(con, chave)):
+        return guardado
 
     try:
         html = buscar(url)
     except Exception as erro:
         raise HTTPException(502, f"a SEFAZ não respondeu: {erro}") from erro
 
-    # O HTML cru é gravado ANTES de interpretar. Quando a SEFAZ mexer no
-    # layout, o reprocessamento roda em cima disto e nenhum cupom se perde.
-    (config().pasta_cupons / f"{chave}.html").write_text(html, encoding="utf-8")
-
-    cupom = interpretar(html)
-    if cupom.chave != chave:
-        cupom.avisos.append(f"a chave da página ({cupom.chave}) difere da chave do QR ({chave})")
-        cupom.chave = chave
-    cupons.gravar(con, cupom, morador=quem, origem=origem, url_qr=url)
-    return {"novo": True, "cupom": cupons.ler(con, chave)}
+    _guardar_html(chave, html)
+    return _gravar(con, chave, interpretar(html), quem, origem, url_qr=url)
 
 
 @app.post("/api/cupom")
@@ -192,8 +239,9 @@ async def enviar_cupom(envio: EnvioCupom, quem: Morador, con: Banco):
         if not guardado:
             raise HTTPException(
                 404,
-                "não tenho esse cupom. A chave sozinha não basta para consultar a SEFAZ: "
-                "o portal exige o link inteiro do QR Code, com o hash de segurança.")
+                "não tenho esse cupom guardado. A rota do QR Code exige o link inteiro, "
+                "com o hash de segurança; para entrar só com a chave, use a consulta "
+                "completa do portal, em /api/cupom/chave — ela pede um captcha.")
         return responder({"novo": False, "cupom": guardado})
     raise HTTPException(400, "mande a url do QR Code ou a chave de um cupom já guardado")
 
@@ -229,6 +277,166 @@ async def enviar_foto(quem: Morador, con: Banco, foto: Annotated[UploadFile, Fil
     raise HTTPException(
         422, "não achei nenhum QR Code nessa foto. A foto ficou guardada no "
              "servidor para eu descobrir por quê — tente também colar o link.")
+
+
+# ── entrar pela chave, quando o QR está perdido ──────────────────────────────
+# O QR manchado não é hipótese: em 26/08/2026 duas fotos morreram em
+# dados/falhas/ e resistiram a 840 combinações de escala, filtro e
+# decodificador. A chave, essa, continua impressa no papel — e o portal do
+# estado tem uma segunda consulta que a aceita, cobrando um captcha.
+#
+# Os desafios abertos vivem AQUI, em memória: são sessão do portal, não dado da
+# casa, e não têm o que fazer em disco. Um punhado basta, porque do outro lado
+# é gente digitando letra por letra.
+TETO_DESAFIOS = 10
+_desafios: dict[str, Desafio] = {}
+
+
+def _limpar_desafios() -> None:
+    for id_desafio in [i for i, d in _desafios.items() if d.vencido]:
+        _desafios.pop(id_desafio, None)
+    while len(_desafios) > TETO_DESAFIOS:
+        _desafios.pop(next(iter(_desafios)))
+
+
+def _cupom_da_chave(con, chave: str, *, total=None, emitido_em=None, avisos: list[str]) -> Cupom:
+    """O cupom que a própria chave já permite montar: loja, número, série, mês.
+
+    Sem itens, de propósito — meia informação vale mais que nenhuma, e o
+    `completo = 0` manda ele para a fila de revisão.
+    """
+    dados = dados_da_chave(chave)
+    linha = con.execute(
+        "SELECT razao FROM estabelecimento WHERE cnpj = ?", (dados["cnpj"],)).fetchone()
+    # Loja já conhecida mantém o nome dela: `_garantir_estabelecimento` sobrescreve
+    # a razão social, e cupom digitado não pode rebatizar o mercado de "CNPJ ...".
+    razao = linha["razao"] if linha else f"CNPJ {cnpj_formatado(dados['cnpj'])}"
+    return Cupom(
+        chave=chave,
+        estabelecimento=Estabelecimento(cnpj=dados["cnpj"], razao=razao),
+        emitido_em=emitido_em,
+        numero=dados["numero"], serie=dados["serie"],
+        total=total, valor_pago=total,
+        avisos=list(avisos))
+
+
+def _total_digitado(texto: str) -> Decimal:
+    bruto = (texto or "").replace("R$", "").strip()
+    try:
+        valor = dinheiro(bruto) if "," in bruto else Decimal(bruto)
+    except (InvalidOperation, ValueError):
+        valor = None
+    if valor is None or valor <= 0:
+        raise HTTPException(400, "quanto foi a compra? Mande o total do cupom, como 106,74.")
+    return valor
+
+
+def _data_digitada(texto: str, chave: str) -> datetime:
+    try:
+        data = datetime.fromisoformat((texto or "").strip())
+    except ValueError as erro:
+        raise HTTPException(400, "que dia foi a compra? A data vai como AAAA-MM-DD.") from erro
+    dados = dados_da_chave(chave)
+    # A chave carrega o mês da emissão. Data fora dele jogaria o gasto no mês
+    # errado — e gasto no mês errado é pior que cupom faltando.
+    if (data.year, data.month) != (dados["ano"], dados["mes"]):
+        raise HTTPException(
+            400, f"a chave diz que essa nota é de {dados['mes']:02d}/{dados['ano']}, "
+                 f"e a data mandada é de {data.month:02d}/{data.year}.")
+    return data
+
+
+class EnvioChave(BaseModel):
+    chave: str                 # os 44 dígitos, com ou sem os espaços do papel
+    desafio: str               # o id devolvido por /api/chave/desafio
+    captcha: str               # as letras que o morador leu na imagem
+
+
+class EnvioManual(BaseModel):
+    chave: str
+    total: str = ""
+    emitido_em: str = ""       # AAAA-MM-DD
+
+
+# As três rotas abaixo são `def` e não `async def` de propósito: falam com a
+# rede de forma síncrona, e o FastAPI as manda para o threadpool em vez de
+# travar o event loop de todo mundo enquanto o portal do estado pensa.
+@app.get("/api/chave/desafio")
+def desafio_de_captcha(quem: Morador):
+    """Um captcha novo, para o morador ler e digitar.
+
+    Quem resolve é gente. O cupomzinho só carrega a imagem até a tela.
+    """
+    _limpar_desafios()
+    try:
+        desafio = abrir_desafio()
+    except PortalMudou as erro:
+        raise HTTPException(502, f"o formulário do portal mudou de forma: {erro}") from erro
+    except Exception as erro:
+        raise HTTPException(502, f"a SEFAZ não respondeu: {erro}") from erro
+
+    _desafios[desafio.id] = desafio
+    log.info("captcha aberto para %s (%d desafios vivos)", quem, len(_desafios))
+    return responder({"desafio": desafio.id, "imagem": desafio.imagem_data_uri})
+
+
+@app.post("/api/cupom/chave")
+def enviar_chave(envio: EnvioChave, quem: Morador, con: Banco):
+    """Consulta completa pela chave digitada — a saída quando o QR não lê.
+
+    A chave se confere sozinha, então dígito trocado é recusado ANTES de gastar
+    o captcha. E o captcha, uma vez usado, não volta: erro rende desafio novo.
+    """
+    chave = _chave_valida(envio.chave)
+    if (guardado := _ja_guardado(con, chave)):
+        return responder(guardado)
+
+    desafio = _desafios.pop(envio.desafio, None)
+    if desafio is None or desafio.vencido:
+        raise HTTPException(410, "esse captcha venceu. Peça outra imagem e mande de novo.")
+
+    try:
+        html = consultar(desafio, chave, envio.captcha.strip())
+    except CaptchaRecusado as erro:
+        raise HTTPException(422, "as letras do captcha não conferiram — a imagem já foi "
+                                 "trocada, é só ler a nova.") from erro
+    except ChaveNaoAchada as erro:
+        raise HTTPException(404, "o portal não achou nota com essa chave. Confira os dígitos; "
+                                 "nota recém-emitida às vezes demora a aparecer.") from erro
+    except Exception as erro:
+        raise HTTPException(502, f"a SEFAZ não respondeu: {erro}") from erro
+
+    _guardar_html(chave, html)
+    try:
+        cupom = interpretar_resposta(html)
+    except LayoutDesconhecido:
+        # O HTML cru já está em disco: é dele que sai a fixture que ensina o
+        # parser a ler esta tela. Até lá o cupom entra pela metade, não se perde.
+        log.warning("consulta completa em layout desconhecido; HTML guardado para a chave %s",
+                    chave)
+        cupom = _cupom_da_chave(
+            con, chave, avisos=["a consulta completa veio num layout que ainda não sei ler; "
+                                "o cupom entrou sem os itens"])
+    return responder(_gravar(con, chave, cupom, quem, "chave"))
+
+
+@app.post("/api/cupom/manual")
+def enviar_manual(envio: EnvioManual, quem: Morador, con: Banco):
+    """A rede de segurança: registrar o gasto só com a chave e o total.
+
+    Para quando nem o portal ajuda — SEFAZ fora do ar, captcha teimoso. Entra
+    sem itens, com aviso, e cai na fila de revisão para ser reconsultado depois.
+    """
+    chave = _chave_valida(envio.chave)
+    if (guardado := _ja_guardado(con, chave)):
+        return responder(guardado)
+
+    cupom = _cupom_da_chave(
+        con, chave,
+        total=_total_digitado(envio.total),
+        emitido_em=_data_digitada(envio.emitido_em, chave),
+        avisos=["cupom digitado a partir da chave: sem os itens, só o total"])
+    return responder(_gravar(con, chave, cupom, quem, "manual"))
 
 
 # ── consulta ─────────────────────────────────────────────────────────────────

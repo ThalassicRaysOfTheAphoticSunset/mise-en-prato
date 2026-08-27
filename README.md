@@ -72,6 +72,10 @@ servidor, não o navegador. Isso deixa o caminho igual em qualquer aparelho.
      método `POST`, corpo `JSON` com o campo `url` = *Código QR* (a saída do
      passo anterior)
    - dê um nome, e **Adicionar à Tela de Início**.
+4. **Digitar a chave de acesso** — quando o QR está manchado e não lê de jeito
+   nenhum. São os 44 números impressos logo acima do quadradinho, em grupos de
+   quatro. Abre a gaveta *ou digitar a chave de acesso*, o portal do estado
+   manda um captcha, você lê as letras. Ver "Quando o QR não lê", abaixo.
 
 Mandar o mesmo cupom duas vezes não duplica nada: a chave de acesso é a chave
 primária, e reenvio é o caso comum, não a exceção.
@@ -202,6 +206,61 @@ registradas para ninguém as perseguir de novo: falta de zona de silêncio (o
 zbar lê QR sem margem nenhuma) e filtro de mediana para matar o chapisco (não
 recupera em resolução alta).
 
+### Quando o QR não lê: a segunda porta do portal
+
+A escada de escalas tem limite, e o limite tem data: **26/08/2026**, duas fotos
+de um cupom térmico manchado que resistiram a tudo. A medição está no topo de
+`cupomzinho/qr.py` — 840 combinações de escala, filtro e decodificador, nenhuma
+leu. Aquele QR está fisicamente perdido.
+
+A chave de acesso, porém, continua impressa no papel. E ela **não serve** para a
+rota do QR, por um motivo que não é falta de esperteza. Medido contra o portal
+em 27/08/2026:
+
+```
+GET /nfce/qrcode?p=<chave>|2|1|1|<hash certo> .... 200, o DANFE inteiro
+GET /nfce/qrcode?p=<chave> ...................... 200, "Erro interno no servidor"
+GET /nfce/qrcode?p=<chave>|2|1|1|<hash zerado> .. 200, "100 - QR Code Inválido"
+```
+
+O `p` termina num SHA-1 que o emitente calcula com o CSC dele — segredo que não
+é impresso e não se deriva da chave. Essa porta exige o QR, ponto final.
+
+Só que o estado mantém uma segunda consulta, a **Consulta Completa NFC-e**, e
+essa aceita a chave digitada, cobrando um captcha de imagem:
+
+```
+POST https://sped.fazenda.pr.gov.br/NFCe/webservices/sped/nfce/completa
+  txRota=nfce  txTipo=completa  txOrigem=formulario  txAmbiente=1
+  txChave=<44 dígitos>  captcha_sid  captcha_token  captcha_response
+  form_build_id  form_id  op=Consultar
+imagem: /image-captcha-generate/<sid>/<token>   (JPEG, apesar do nome)
+```
+
+É o que `cupomzinho/consulta_chave.py` faz: busca o formulário, traz a imagem
+até a tela do morador, e devolve ao portal a resposta que **ele** digitou. Sem
+OCR, sem laço, sem agendamento — um cupom por vez, quando alguém pede. Quem
+prova ser gente continua sendo gente; o que muda é só a tela onde as letras são
+digitadas. É a mesma disciplina que o cliente do Menor Preço segue.
+
+Dois detalhes que custaram medição:
+
+- **Não use a rota amigável** `www.fazenda.pr.gov.br/nfce/consulta`: ela responde
+  301 para `www.sped...`, e esse host serve certificado **auto-assinado e
+  vencido**, emitido para `www.drupalweb.celepar.pr.gov.br`. Desligar a
+  verificação de TLS para contornar seria trocar um defeito do portal por um
+  defeito nosso. O endereço direto acima tem certificado válido.
+- **A chave se confere sozinha**: o 44º dígito é módulo 11 sobre os outros 43
+  (`validar_chave`). Quem digita 44 números troca algum, e recusar de graça é
+  melhor que gastar um captcha para o portal responder "nota não encontrada".
+  Conferido contra os 8 cupons reais já guardados: 8 de 8.
+
+E a chave ainda diz mais do que parece — os dígitos são posicionais
+(`dados_da_chave`): UF, mês/ano da emissão, **CNPJ da loja**, série e número.
+Dá para montar meio cupom sem consultar ninguém, que é o que a rota
+`/api/cupom/manual` faz quando nem o portal ajuda: grava sem itens, com aviso, e
+manda para a fila de revisão. Meia informação vale mais que nenhuma.
+
 **O cupom não traz código de barras nem NCM.** Traz a descrição e um código
 interno da loja. Daí o casamento de produto em três degraus (`cupomzinho/cupons.py`):
 
@@ -243,7 +302,9 @@ Reconstruir a imagem só é preciso quando muda dependência.
 
 | Arquivo | Papel |
 |---|---|
-| `cupomzinho/nfce_pr.py` | busca e interpreta o cupom no portal da SEFAZ-PR |
+| `cupomzinho/nfce_pr.py` | busca e interpreta o cupom no portal da SEFAZ-PR; lê a chave de acesso |
+| `cupomzinho/qr.py` | acha o QR na foto: escada de escalas, dois decodificadores |
+| `cupomzinho/consulta_chave.py` | a segunda porta: consulta pela chave, com o captcha do portal |
 | `cupomzinho/cupons.py` | grava o cupom e casa item com produto |
 | `cupomzinho/relatorios.py` | as consultas de gasto e de histórico |
 | `cupomzinho/identidade.py` | quem é o morador, pelo `whois` do tailscaled |
@@ -264,6 +325,12 @@ escritores em sqlite é o caminho curto para `database is locked`.
 
 ## O que falta
 
+- **Ler a tela da consulta completa item a item.** O caminho da chave já está
+  de pé e grava o HTML cru em `dados/cupons/<chave>.html`, mas o parser só
+  reconhece o layout do DANFE da rota do QR; se a consulta completa vier
+  diferente, o cupom entra sem itens e com aviso (`LayoutDesconhecido`). Falta a
+  primeira amostra real virar fixture — e, se a tela trouxer **GTIN e NCM**, que
+  o DANFE não traz, o casamento de produto melhora de graça.
 - **OCR do cupom inteiro**, para comércio que não emite NFC-e. O lugar está
   reservado: `cupom.origem` já aceita `'foto'` e o Pillow já está na imagem.
 - Ajustar quantidade do item direto na lista (hoje entra 1 e edita-se pela API).

@@ -86,8 +86,10 @@ async function enviar(promessa, textoOcupado) {
     aviso(resposta.novo ? 'Cupom registrado.' : 'Esse cupom já estava guardado.');
     desenharCupom(resposta);
     carregadores.enviar();
+    return true;
   } catch (erro) {
     aviso(erro.message, true);
+    return false;
   }
 }
 
@@ -108,6 +110,77 @@ $('#form-link').onsubmit = (ev) => {
     body: JSON.stringify({ url }),
   }), 'Consultando a SEFAZ…');
   $('#link').value = '';
+};
+
+/* ── entrar pela chave, quando o QR está perdido ─────────────────────────────
+   O captcha é do portal do estado e quem o resolve é quem está olhando a tela.
+   A imagem só é pedida quando alguém abre a gaveta: captcha tem validade curta,
+   e buscar um a cada carregamento da tela seria incomodar o portal à toa. */
+let desafioAberto = null;
+
+async function abrirDesafio() {
+  $('#captcha-caixa').hidden = false;
+  $('#captcha-img').removeAttribute('src');
+  $('#captcha').value = '';
+  desafioAberto = null;
+  try {
+    const { desafio, imagem } = await api('/api/chave/desafio');
+    desafioAberto = desafio;
+    $('#captcha-img').src = imagem;
+  } catch (erro) {
+    aviso(erro.message, true);
+  }
+}
+
+$('#alt-chave').ontoggle = () => {
+  if ($('#alt-chave').open && !desafioAberto) abrirDesafio();
+};
+$('#captcha-outro').onclick = abrirDesafio;
+
+$('#form-chave').onsubmit = async (ev) => {
+  ev.preventDefault();
+  if (!desafioAberto) {
+    await abrirDesafio();
+    aviso('Leia as letras da imagem e mande de novo.');
+    return;
+  }
+  const corpo = {
+    chave: $('#chave').value.trim(),
+    desafio: desafioAberto,
+    captcha: $('#captcha').value.trim(),
+  };
+  /* O captcha vale uma vez só: usado, certo ou errado, não volta. Por isso a
+     imagem é trocada em qualquer desfecho, e não só quando as letras erram. */
+  const deuCerto = await enviar(
+    api('/api/cupom/chave', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(corpo),
+    }), 'Consultando o portal pela chave…');
+  desafioAberto = null;
+  if (deuCerto) {
+    $('#chave').value = '';
+    $('#captcha-caixa').hidden = true;
+  } else {
+    abrirDesafio();
+  }
+};
+
+$('#manual-data').valueAsDate = new Date();
+
+$('#form-manual').onsubmit = async (ev) => {
+  ev.preventDefault();
+  const ok = await enviar(api('/api/cupom/manual', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      chave: $('#chave').value.trim(),
+      total: $('#manual-total').value.trim(),
+      emitido_em: $('#manual-data').value,
+    }),
+  }), 'Registrando o gasto…');
+  if (ok) {
+    $('#chave').value = '';
+    $('#manual-total').value = '';
+  }
 };
 
 carregadores.enviar = async () => {

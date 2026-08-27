@@ -11,7 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from cupomzinho.nfce_pr import chave_da_url, interpretar, normalizar
+from cupomzinho.nfce_pr import (
+    chave_da_url,
+    dados_da_chave,
+    interpretar,
+    normalizar,
+    validar_chave,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cupom_lar_2026-08-14.html"
 URL_QR = ("https://www.fazenda.pr.gov.br/nfce/qrcode?p=41260877752293016191651170001637541131086428"
@@ -139,3 +145,46 @@ def test_normalizar_nao_confunde_produtos_diferentes():
     assert normalizar("ATUM GOM COSTA RALADO NAT 170G") != normalizar(
         "ATUM GOM COSTA RALADO DEF 170G"
     )
+
+
+# ── a chave que se confere sozinha ───────────────────────────────────────────
+# Mesma chave mascarada da fixture, com o dígito verificador recalculado para
+# fechar. O algoritmo foi conferido em 27/08/2026 contra os 8 cupons reais já
+# guardados no banco da casa: 8 de 8, dígito calculado igual ao impresso.
+CHAVE = "41260877752293016191651170001637541199999992"
+
+
+def test_chave_boa_passa_no_digito_verificador():
+    assert validar_chave(CHAVE)
+
+
+def test_digito_trocado_e_pego():
+    """É o erro de quem copia 44 números do papel, e sai de graça pegá-lo.
+
+    Sem isto, dígito trocado só apareceria depois de gastar um captcha e uma
+    consulta ao portal, para voltar como "nota não encontrada" — que manda a
+    pessoa conferir a chave inteira em vez de dizer onde está o erro.
+    """
+    trocada = CHAVE[:20] + ("8" if CHAVE[20] != "8" else "7") + CHAVE[21:]
+    assert not validar_chave(trocada)
+    assert not validar_chave(CHAVE[:43] + ("0" if CHAVE[43] != "0" else "1"))
+
+
+def test_chave_de_tamanho_errado_ou_com_letra_nao_passa():
+    assert not validar_chave(CHAVE[:43])
+    assert not validar_chave(CHAVE[:43] + "X")
+    assert not validar_chave("")
+
+
+def test_dados_da_chave_dizem_loja_mes_e_numero():
+    """Os 44 dígitos são posicionais: dá para montar meio cupom sem consultar.
+
+    Série e número saem daqui iguais aos que o parser lê do DANFE — conferido
+    nos 8 cupons do banco da casa em 27/08/2026, 8 de 8.
+    """
+    dados = dados_da_chave(CHAVE)
+    assert dados["uf"] == "41"                       # Paraná
+    assert (dados["ano"], dados["mes"]) == (2026, 8)
+    assert dados["cnpj"] == "77752293016191"
+    assert dados["modelo"] == "65"                   # NFC-e
+    assert (dados["serie"], dados["numero"]) == ("117", "163754")
