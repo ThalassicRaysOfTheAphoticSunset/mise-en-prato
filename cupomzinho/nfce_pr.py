@@ -233,7 +233,10 @@ def _ler_itens(sopa, avisos: list[str]) -> list[Item]:
         avisos.append("nenhum item encontrado na nota")
 
     for seq, tr in enumerate(linhas, start=1):
-        descricao = _campo(tr, "txtTit2")
+        # O DANFE do QR escreve a descrição em txtTit2; a consulta completa
+        # (pela chave digitada) serve a MESMA linha com txtTit. Medido em
+        # 30/08/2026: fora essa classe, as duas telas são idênticas item a item.
+        descricao = _campo(tr, "txtTit2") or _campo(tr, "txtTit")
         codigo = re.sub(r"\D", "", _campo(tr, "RCod"))            # "(Código: 456641)"
         quantidade = dinheiro(_campo(tr, "Rqtd", "Qtde.:"))      # fracionária em item por peso
         unidade = _campo(tr, "RUN", "UN:")

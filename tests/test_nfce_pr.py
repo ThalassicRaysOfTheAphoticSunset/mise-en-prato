@@ -147,6 +147,47 @@ def test_normalizar_nao_confunde_produtos_diferentes():
     )
 
 
+# ── a mesma nota pela consulta completa (chave digitada) ─────────────────────
+# A fixture é a compra de 27/08/2026 no LAR, a primeira da casa a entrar pela
+# chave digitada: 9 itens, R$ 63,94. Anonimizada como a outra — chave e
+# protocolo mascarados preservando o formato. A tela da consulta completa é o
+# mesmo DANFE, exceto que a descrição do item vem em txtTit, não txtTit2 — foi
+# o que mandou este cupom para a fila de revisão com "sem descrição" em tudo.
+FIXTURE_CHAVE = Path(__file__).parent / "fixtures" / "cupom_lar_consulta_chave_2026-08-27.html"
+
+
+@pytest.fixture(scope="module")
+def cupom_da_consulta_completa():
+    return interpretar(FIXTURE_CHAVE.read_text(encoding="utf-8"))
+
+
+def test_consulta_completa_le_as_descricoes(cupom_da_consulta_completa):
+    """Regressão: txtTit sem o 2 não pode virar nove "sem descrição"."""
+    itens = cupom_da_consulta_completa.itens
+    assert len(itens) == 9
+    assert all(i.descricao for i in itens)
+    primeiro = itens[0]
+    assert primeiro.descricao == "BATATA PALHA GERIBA TRAD 100G"
+    assert primeiro.codigo_loja == "139491"
+    assert primeiro.valor_total == Decimal("7.49")
+
+
+def test_consulta_completa_fecha_e_esta_completa(cupom_da_consulta_completa):
+    cupom = cupom_da_consulta_completa
+    somado = sum(i.valor_total for i in cupom.itens)
+    assert somado - cupom.desconto == cupom.valor_pago == Decimal("63.94")
+    assert cupom.avisos == []
+    assert cupom.completo is True
+
+
+def test_consulta_completa_e_reconhecida_como_danfe():
+    """A tela da chave digitada tem as marcas do DANFE e dispensa parser novo."""
+    from cupomzinho.consulta_chave import interpretar_resposta
+
+    cupom = interpretar_resposta(FIXTURE_CHAVE.read_text(encoding="utf-8"))
+    assert len(cupom.itens) == 9
+
+
 # ── a chave que se confere sozinha ───────────────────────────────────────────
 # Mesma chave mascarada da fixture, com o dígito verificador recalculado para
 # fechar. O algoritmo foi conferido em 27/08/2026 contra os 8 cupons reais já
