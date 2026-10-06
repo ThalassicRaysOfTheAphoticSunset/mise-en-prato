@@ -190,3 +190,29 @@ def test_gravar_completa_cupom_incompleto(con, cupom):
     assert salvo["completo"] is True
     assert len(salvo["itens"]) == 16
     assert len(fila_de_revisao(con)) == 0
+
+
+def test_sped_completo_grava_e_enriquece_gtin_no_banco(con):
+    """Consulta completa do SPED grava itens e enriquece GTIN/NCM em produto."""
+    fixture_sped = Path(__file__).parent / "fixtures" / "cupom_sped_completo.html"
+    cupom_sped = interpretar(fixture_sped.read_text(encoding="utf-8"))
+    assert gravar(con, cupom_sped, morador="Miguel") is True
+
+    salvo = ler(con, cupom_sped.chave)
+    assert salvo["completo"] is True
+    assert len(salvo["itens"]) == 3
+
+    cafe = con.execute(
+        "SELECT gtin, ncm, is_granel FROM produto WHERE descricao_canonica LIKE 'CAFE PILAO%'"
+    ).fetchone()
+    assert cafe["gtin"] == "7896005800119"
+    assert cafe["ncm"] == "09012100"
+    assert cafe["is_granel"] == 0
+
+    maca = con.execute(
+        "SELECT gtin, ncm, is_granel FROM produto WHERE descricao_canonica LIKE 'MACA FUJI%'"
+    ).fetchone()
+    assert maca["gtin"] is None
+    assert maca["ncm"] == "08081000"
+    assert maca["is_granel"] == 1
+

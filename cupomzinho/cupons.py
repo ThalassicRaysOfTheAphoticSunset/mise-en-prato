@@ -177,6 +177,13 @@ def gravar(con: sqlite3.Connection, cupom: Cupom, *, morador: str,
                      milesimos(item.quantidade), centavos(item.valor_unitario),
                      centavos(item.valor_total), produto_id),
                 )
+                if item.gtin or item.ncm:
+                    con.execute(
+                        """UPDATE produto
+                              SET gtin = COALESCE(gtin, ?), ncm = COALESCE(ncm, ?)
+                            WHERE id = ?""",
+                        (item.gtin, item.ncm, produto_id),
+                    )
                 con.execute(
                     """INSERT OR IGNORE INTO preco
                            (produto_id, cnpj, unitario_centavos, observado_em, fonte)
@@ -217,6 +224,13 @@ def gravar(con: sqlite3.Connection, cupom: Cupom, *, morador: str,
                  milesimos(item.quantidade), centavos(item.valor_unitario),
                  centavos(item.valor_total), produto_id),
             )
+            if item.gtin or item.ncm:
+                con.execute(
+                    """UPDATE produto
+                          SET gtin = COALESCE(gtin, ?), ncm = COALESCE(ncm, ?)
+                        WHERE id = ?""",
+                    (item.gtin, item.ncm, produto_id),
+                )
             # O preço pago entra na MESMA série que o Menor Preço alimenta.
             # OR IGNORE porque duas linhas idênticas do mesmo cupom (o atum
             # comprado duas vezes) são uma observação de preço só.

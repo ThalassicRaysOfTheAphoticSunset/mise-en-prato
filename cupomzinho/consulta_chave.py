@@ -172,11 +172,12 @@ def interpretar_resposta(html: str) -> Cupom:
     """Cupom a partir do HTML da consulta completa.
 
     O portal serve duas telas diferentes para a mesma nota: o DANFE da rota do
-    QR e a consulta completa desta rota. Quando as marcas do DANFE aparecem, o
-    parser de sempre serve e não há razão para manter dois — quando não
-    aparecem, quem sabe ler é `LayoutDesconhecido`, e o HTML cru já foi gravado
-    em disco pelo chamador, que é justamente de onde sai a fixture.
+    QR e a consulta completa do SPED. Ambos são suportados por `interpretar`.
+    Quando nem itens nem totais são reconhecidos, levanta `LayoutDesconhecido`
+    para a nota cair na fila de revisão sem perder o HTML cru gravado em disco.
     """
-    if 'class="chave"' in html and 'id="u20"' in html:
-        return interpretar(html)
-    raise LayoutDesconhecido("a consulta completa veio num layout que ainda não sei ler")
+    cupom = interpretar(html)
+    if not cupom.itens and cupom.total is None:
+        raise LayoutDesconhecido("a consulta completa veio num layout que ainda não sei ler")
+    return cupom
+

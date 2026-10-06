@@ -188,6 +188,64 @@ def test_consulta_completa_e_reconhecida_como_danfe():
     assert len(cupom.itens) == 9
 
 
+# ── layout completo SPED (com GTIN e NCM) ────────────────────────────────────
+FIXTURE_SPED = Path(__file__).parent / "fixtures" / "cupom_sped_completo.html"
+
+
+@pytest.fixture(scope="module")
+def cupom_sped():
+    return interpretar(FIXTURE_SPED.read_text(encoding="utf-8"))
+
+
+def test_sped_completo_identificacao(cupom_sped):
+    assert cupom_sped.chave == "41260976430438000100650010000123451123456785"
+    assert cupom_sped.numero == "12345"
+    assert cupom_sped.serie == "1"
+    assert cupom_sped.emitido_em == datetime(2026, 9, 15, 14, 30, 0)
+    assert cupom_sped.protocolo == "141260001234567"
+
+
+def test_sped_completo_estabelecimento(cupom_sped):
+    e = cupom_sped.estabelecimento
+    assert e.razao == "MERCADO MODELO LTDA"
+    assert e.cnpj == "76430438000100"
+    assert e.municipio == "MEDIANEIRA"
+    assert e.uf == "PR"
+
+
+def test_sped_completo_itens_com_gtin_e_ncm(cupom_sped):
+    itens = cupom_sped.itens
+    assert len(itens) == 3
+
+    cafe = itens[0]
+    assert cafe.descricao == "CAFE PILAO TRADICIONAL 500G"
+    assert cafe.quantidade == Decimal("1.000")
+    assert cafe.unidade == "UN"
+    assert cafe.valor_unitario == Decimal("18.90")
+    assert cafe.valor_total == Decimal("18.90")
+    assert cafe.gtin == "7896005800119"
+    assert cafe.ncm == "09012100"
+
+    leite = itens[1]
+    assert leite.descricao == "LEITE INTEGRAL TIROL 1L"
+    assert leite.gtin == "7891000100103"
+    assert leite.ncm == "04012010"
+
+    maca = itens[2]
+    assert maca.descricao == "MACA FUJI KG"
+    assert maca.unidade == "KG"
+    assert maca.gtin is None  # 'SEM GTIN' é ignorado
+    assert maca.ncm == "08081000"
+
+
+def test_sped_completo_totais_e_fechamento(cupom_sped):
+    assert cupom_sped.total == Decimal("38.40")
+    assert cupom_sped.desconto == Decimal("0.00")
+    assert cupom_sped.valor_pago == Decimal("38.40")
+    assert cupom_sped.forma_pagamento == "Cartão de Débito"
+    assert cupom_sped.completo is True
+
+
 # ── a chave que se confere sozinha ───────────────────────────────────────────
 # Mesma chave mascarada da fixture, com o dígito verificador recalculado para
 # fechar. O algoritmo foi conferido em 27/08/2026 contra os 8 cupons reais já

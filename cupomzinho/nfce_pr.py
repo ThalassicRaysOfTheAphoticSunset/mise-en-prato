@@ -39,6 +39,10 @@ from bs4 import BeautifulSoup
 CONSULTA = "https://www.fazenda.pr.gov.br/nfce/qrcode"
 
 
+class LayoutDesconhecido(Exception):
+    """Veio HTML que o parser não reconhece. O cru fica em disco para virar fixture."""
+
+
 # ── o que sai daqui ──────────────────────────────────────────────────────────
 @dataclass
 class Estabelecimento:
@@ -61,6 +65,9 @@ class Item:
     unidade: str
     valor_unitario: Decimal
     valor_total: Decimal
+    gtin: str | None = None
+    ncm: str | None = None
+
 
 
 @dataclass
@@ -329,24 +336,253 @@ def _ler_infos(sopa, cupom: Cupom) -> None:
     # controle de gasto da casa, então NÃO é lido nem guardado. De propósito.
 
 
+def _detectar_layout(sopa) -> str:
+    if sopa.select_one("#tabResult") or sopa.select_one("#u20"):
+        return "danfe_mobile"
+    if (
+        sopa.select_one(".tabela_produtos")
+        or sopa.select_one("#tabProdutos")
+        or sopa.select_one("#NFe")
+        or sopa.select_one("#GeralXslt")
+        or any("ncm" in th.get_text().lower() for th in sopa.select("th"))
+    ):
+        return "sped_completo"
+    return "desconhecido"
+
+
+def _ler_sped_completo(sopa, chave: str, avisos: list[str]) -> Cupom:
+    from .sanidade import digito_gtin_confere
+
+    def valor_por_label(contexto, texto_label: str) -> str:
+        alvo = texto_label.lower()
+        for rotulo in contexto.select("label"):
+            if alvo in _limpar(rotulo.get_text()).lower():
+                pai = rotulo.parent
+                if pai:
+                    span = pai.select_one("span")
+                    if span and span != rotulo:
+                        return _limpar(span.get_text())
+                    texto = _limpar(pai.get_text().replace(rotulo.get_text(), ""))
+                    if texto:
+                        return texto
+        return ""
+
+    bloco_emit = sopa.select_one("fieldset.bloco_emitente") or sopa
+    razao = (
+        _limpar(sopa.select_one("span.razao_social").get_text())
+        if sopa.select_one("span.razao_social")
+        else valor_por_label(bloco_emit, "Razão Social")
+    )
+    cnpj_bruto = (
+        _limpar(sopa.select_one("span.cnpj").get_text())
+        if sopa.select_one("span.cnpj")
+        else valor_por_label(bloco_emit, "CNPJ")
+    )
+    cnpj = re.sub(r"\D", "", cnpj_bruto)
+    if len(cnpj) != 14 and chave and len(chave) == 44:
+        cnpj = chave[6:20]
+
+    endereco_bruto = (
+        _limpar(sopa.select_one("span.endereco").get_text())
+        if sopa.select_one("span.endereco")
+        else valor_por_label(bloco_emit, "Endereço")
+    )
+    partes = [_limpar(p) for p in endereco_bruto.split(",")] if endereco_bruto else []
+    partes += [""] * (6 - len(partes))
+    estab = Estabelecimento(
+        cnpj=cnpj, razao=razao,
+        logradouro=partes[0], numero=partes[1], complemento=partes[2],
+        bairro=partes[3], municipio=partes[4], uf=partes[5],
+    )
+    if not estab.razao:
+        avisos.append("razão social do emitente não reconhecida")
+    if len(estab.cnpj) != 14:
+        avisos.append("CNPJ do emitente não reconhecido")
+
+    bloco_id = sopa.select_one("fieldset.bloco_identificacao") or sopa
+    numero = valor_por_label(bloco_id, "Número")
+    serie = valor_por_label(bloco_id, "Série")
+    protocolo = valor_por_label(bloco_id, "Protocolo")
+
+    emissao_texto = valor_por_label(bloco_id, "Emissão") or valor_por_label(bloco_id, "Data")
+    emitido_em = None
+    if emissao_texto:
+        achado = re.search(r"(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2})", emissao_texto)
+        if achado:
+            emitido_em = datetime.strptime(achado.group(1), "%d/%m/%Y %H:%M:%S")
+    if not emitido_em and chave and len(chave) == 44:
+        d = dados_da_chave(chave)
+        numero = numero or d["numero"]
+        serie = serie or d["serie"]
+
+    if not emitido_em:
+        avisos.append("data de emissão não reconhecida")
+
+    itens: list[Item] = []
+    tabela = sopa.select_one("table.tabela_produtos") or sopa.select_one("table#tabProdutos")
+    if not tabela:
+        for tab in sopa.select("table"):
+            ths = [normalizar(th.get_text()).lower() for th in tab.select("th")]
+            if any("desc" in t or "prod" in t for t in ths) and any(
+                "qtd" in t or "quant" in t for t in ths
+            ):
+                tabela = tab
+                break
+
+    if tabela:
+        ths = tabela.select("thead th") or tabela.select("tr th")
+        col_map = {}
+        for idx, th in enumerate(ths):
+            txt = normalizar(th.get_text()).lower()
+            if any(k in txt for k in ("unit", "vun")):
+                col_map["unitario"] = idx
+            elif any(k in txt for k in ("total", "vtot", "vprod")):
+                col_map["total"] = idx
+            elif any(k in txt for k in ("qtd", "quant")):
+                col_map["quantidade"] = idx
+            elif "ean" in txt or "gtin" in txt or "barras" in txt:
+                col_map["gtin"] = idx
+            elif "ncm" in txt:
+                col_map["ncm"] = idx
+            elif "codigo" in txt or "cprod" in txt:
+                col_map["codigo"] = idx
+            elif "unid" in txt or re.search(r"\b(un|ucom|utrib)\b", txt):
+                col_map["unidade"] = idx
+            elif any(k in txt for k in ("desc", "produto", "servico")):
+                col_map["descricao"] = idx
+            elif any(k in txt for k in ("item", "num", "seq")):
+                col_map["seq"] = idx
+
+        def valor_celula(tds, chave_col, padrao=""):
+            if chave_col in col_map and col_map[chave_col] < len(tds):
+                return _limpar(tds[col_map[chave_col]].get_text())
+            return padrao
+
+        linhas = tabela.select("tbody tr") or [tr for tr in tabela.select("tr") if tr.select("td")]
+        for seq_idx, tr in enumerate(linhas, start=1):
+            tds = tr.select("td")
+            if not tds:
+                continue
+
+            descricao = valor_celula(tds, "descricao")
+            if not descricao:
+                continue
+
+            quantidade = dinheiro(valor_celula(tds, "quantidade"))
+            unidade = valor_celula(tds, "unidade")
+            unitario = dinheiro(valor_celula(tds, "unitario"))
+            total = dinheiro(valor_celula(tds, "total"))
+            codigo = re.sub(r"\D", "", valor_celula(tds, "codigo"))
+
+            gtin_bruto = valor_celula(tds, "gtin")
+            gtin = None
+            if gtin_bruto and gtin_bruto.upper() != "SEM GTIN" and gtin_bruto != "0":
+                so_dig = re.sub(r"\D", "", gtin_bruto)
+                if digito_gtin_confere(so_dig):
+                    gtin = so_dig
+
+            ncm_bruto = valor_celula(tds, "ncm")
+            so_ncm = re.sub(r"\D", "", ncm_bruto)
+            ncm = so_ncm if len(so_ncm) == 8 else None
+
+            if quantidade is not None and unitario is not None and total is not None:
+                itens.append(
+                    Item(
+                        seq=seq_idx,
+                        descricao=descricao,
+                        codigo_loja=codigo,
+                        quantidade=quantidade,
+                        unidade=unidade,
+                        valor_unitario=unitario,
+                        valor_total=total,
+                        gtin=gtin,
+                        ncm=ncm,
+                    )
+                )
+            else:
+                avisos.append(f"item {seq_idx} veio incompleto ({descricao})")
+
+    if not itens:
+        avisos.append("nenhum item encontrado na nota")
+
+    bloco_tot = sopa.select_one("fieldset.bloco_totais") or sopa
+    total_prod = dinheiro(
+        _limpar(sopa.select_one("span.total_produtos").get_text())
+        if sopa.select_one("span.total_produtos")
+        else valor_por_label(bloco_tot, "Total dos Produtos")
+    )
+    total_nota = dinheiro(
+        _limpar(sopa.select_one("span.total_nota").get_text())
+        if sopa.select_one("span.total_nota")
+        else (
+            valor_por_label(bloco_tot, "Total da NFC-e")
+            or valor_por_label(bloco_tot, "Valor Total")
+        )
+    )
+    desconto = (
+        dinheiro(
+            _limpar(sopa.select_one("span.desconto").get_text())
+            if sopa.select_one("span.desconto")
+            else valor_por_label(bloco_tot, "Desconto")
+        )
+        or Decimal("0")
+    )
+
+    forma_pgto = (
+        _limpar(sopa.select_one("span.forma_pagamento").get_text())
+        if sopa.select_one("span.forma_pagamento")
+        else valor_por_label(bloco_tot, "Forma de Pagamento")
+    )
+
+    total_final = total_nota or total_prod
+    valor_pago = total_nota or (total_prod - desconto if total_prod is not None else None)
+
+    return Cupom(
+        chave=chave,
+        estabelecimento=estab,
+        itens=itens,
+        emitido_em=emitido_em,
+        numero=numero,
+        serie=serie,
+        protocolo=protocolo,
+        total=total_final,
+        desconto=desconto,
+        valor_pago=valor_pago,
+        qtd_itens=len(itens),
+        forma_pagamento=forma_pgto,
+        consumidor="não identificado",
+        avisos=avisos,
+    )
+
+
 def interpretar(html: str) -> Cupom:
-    """HTML da consulta pública -> Cupom. Pura: não toca a rede."""
+    """HTML da consulta pública (DANFE QR ou SPED Completo) -> Cupom. Pura: não toca a rede."""
     sopa = BeautifulSoup(html, "lxml")
     avisos: list[str] = []
 
     span_chave = sopa.select_one("span.chave")
     chave = re.sub(r"\D", "", span_chave.get_text()) if span_chave else ""
+    if not chave:
+        achado = re.search(r"\b(\d{44})\b", re.sub(r"\s+", "", sopa.get_text()))
+        if achado:
+            chave = achado.group(1)
+
     if len(chave) != 44:
         avisos.append("chave de acesso não reconhecida")
 
-    cupom = Cupom(chave=chave, estabelecimento=_ler_estabelecimento(sopa, avisos), avisos=avisos)
-    cupom.itens = _ler_itens(sopa, avisos)
-    _ler_totais(sopa, cupom)
-    _ler_infos(sopa, cupom)
+    layout = _detectar_layout(sopa)
+    if layout == "sped_completo":
+        cupom = _ler_sped_completo(sopa, chave, avisos)
+    else:
+        # Padrão ou DANFE mobile: tenta ler campos e acumula avisos se estiver vazio
+        cupom = Cupom(
+            chave=chave, estabelecimento=_ler_estabelecimento(sopa, avisos), avisos=avisos
+        )
+        cupom.itens = _ler_itens(sopa, avisos)
+        _ler_totais(sopa, cupom)
+        _ler_infos(sopa, cupom)
 
     # Conferência de caixa: soma dos itens - desconto tem de bater com o pago.
-    # É o que separa "li o cupom" de "li o cupom certo". Uma diferença de um
-    # centavo é tolerada porque item por peso arredonda.
     if cupom.itens and cupom.valor_pago is not None:
         somado = sum(i.valor_total for i in cupom.itens) - cupom.desconto
         if abs(somado - cupom.valor_pago) > Decimal("0.01"):
