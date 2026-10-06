@@ -545,11 +545,271 @@ carregadores.produtos = async () => {
     : '<div class="fraca">nada encontrado</div>';
 };
 
+function calcularCaminhoSuave(coords) {
+  if (coords.length === 2) {
+    return `M ${coords[0].x.toFixed(1)},${coords[0].y.toFixed(1)} L ${coords[1].x.toFixed(1)},${coords[1].y.toFixed(1)}`;
+  }
+  let d = `M ${coords[0].x.toFixed(1)},${coords[0].y.toFixed(1)}`;
+  for (let i = 0; i < coords.length - 1; i++) {
+    const p0 = coords[i === 0 ? i : i - 1];
+    const p1 = coords[i];
+    const p2 = coords[i + 1];
+    const p3 = coords[i + 2 < coords.length ? i + 2 : i + 1];
+
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+    d += ` C ${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  }
+  return d;
+}
+
+function renderizarGraficoHistorico(p) {
+  if (!p.compras || !p.compras.length) {
+    return '<div class="fraca" style="margin:.6rem 0">Nenhuma compra registrada ainda.</div>';
+  }
+  if (p.compras.length === 1) {
+    const u = p.compras[0];
+    return `
+      <div class="grafico-fallback-um">
+        <div class="fraca">
+          Apenas 1 compra registrada (${dia(u.data)} por <strong>${dinheiro(u.valor_unitario)}</strong> no ${u.loja || 'mercado'}).
+          O gráfico de tendência de preço será desenhado a partir da 2ª compra da casa.
+        </div>
+      </div>`;
+  }
+
+  const pontos = p.compras.slice().reverse();
+  const valores = pontos.map((pt) => Number(pt.valor_unitario));
+  const minVal = Math.min(...valores);
+  const maxVal = Math.max(...valores);
+  const mediana = Number(p.mediana_paga ?? valores[Math.floor(valores.length / 2)]);
+
+  const W = 500;
+  const H = 200;
+  const padLeft = 45;
+  const padRight = 30;
+  const padTop = 30;
+  const padBottom = 35;
+  const plotW = W - padLeft - padRight;
+  const plotH = H - padTop - padBottom;
+
+  const range = maxVal === minVal ? (maxVal || 1) * 0.2 : (maxVal - minVal);
+  const yMin = Math.max(0, minVal - range * 0.15);
+  const yMax = maxVal + range * 0.15;
+  const ySpan = (yMax - yMin) || 1;
+
+  const coords = pontos.map((pt, i) => {
+    const x = padLeft + (i / (pontos.length - 1)) * plotW;
+    const y = padTop + plotH - ((Number(pt.valor_unitario) - yMin) / ySpan) * plotH;
+    return { x, y, pt, i };
+  });
+
+  const dLinha = calcularCaminhoSuave(coords);
+  const bottomY = padTop + plotH;
+  const dArea = `${dLinha} L ${coords[coords.length - 1].x.toFixed(1)},${bottomY} L ${coords[0].x.toFixed(1)},${bottomY} Z`;
+
+  const yMed = padTop + plotH - ((mediana - yMin) / ySpan) * plotH;
+
+  let menorIdx = 0;
+  let maiorIdx = 0;
+  pontos.forEach((pt, i) => {
+    const v = Number(pt.valor_unitario);
+    if (v < Number(pontos[menorIdx].valor_unitario)) menorIdx = i;
+    if (v > Number(pontos[maiorIdx].valor_unitario)) maiorIdx = i;
+  });
+
+  const pontosSvg = coords.map((c) => {
+    let cor = 'var(--verde)';
+    let raio = 3.5;
+    let classe = 'ponto-grafico';
+    if (c.i === menorIdx && menorIdx !== maiorIdx) {
+      cor = '#22c55e';
+      raio = 5.5;
+      classe += ' ponto-menor';
+    } else if (c.i === maiorIdx && menorIdx !== maiorIdx) {
+      cor = '#ef4444';
+      raio = 5.5;
+      classe += ' ponto-maior';
+    }
+    return `<circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${raio}" fill="${cor}" stroke="var(--painel)" stroke-width="2" class="${classe}" data-idx="${c.i}"/>`;
+  }).join('');
+
+  return `
+    <div class="grafico-historico-container">
+      <div id="tooltip-grafico-historico" class="tooltip-grafico" hidden></div>
+      <svg id="svg-grafico-historico" class="grafico-historico" viewBox="0 0 ${W} ${H}"
+           preserveAspectRatio="xMidYMid meet" role="img" aria-label="histórico de preços do produto"
+           style="touch-action:none;user-select:none">
+        <defs>
+          <linearGradient id="grad-historico-preco" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="var(--verde)" stop-opacity="0.32"/>
+            <stop offset="100%" stop-color="var(--verde)" stop-opacity="0.0"/>
+          </linearGradient>
+        </defs>
+
+        <!-- Eixos de referência -->
+        <line x1="${padLeft}" y1="${padTop}" x2="${padLeft}" y2="${bottomY}" stroke="var(--borda)" stroke-width="1"/>
+        <line x1="${padLeft}" y1="${bottomY}" x2="${W - padRight}" y2="${bottomY}" stroke="var(--borda)" stroke-width="1"/>
+
+        <!-- Linha da mediana (pontilhada) -->
+        <line x1="${padLeft}" y1="${yMed.toFixed(1)}" x2="${W - padRight}" y2="${yMed.toFixed(1)}"
+              stroke="var(--fraca)" stroke-dasharray="4,4" stroke-width="1.2" opacity="0.6"/>
+        <text x="${W - padRight}" y="${(yMed - 5).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--fraca)">
+          mediana ${dinheiro(mediana)}
+        </text>
+
+        <!-- Rótulos do eixo Y -->
+        <text x="${padLeft - 6}" y="${(padTop + 4).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--fraca)">
+          ${dinheiro(maxVal)}
+        </text>
+        <text x="${padLeft - 6}" y="${(bottomY).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--fraca)">
+          ${dinheiro(minVal)}
+        </text>
+
+        <!-- Rótulos do eixo X (datas) -->
+        <text x="${coords[0].x.toFixed(1)}" y="${H - 10}" text-anchor="start" font-size="9" fill="var(--fraca)">
+          ${dia(pontos[0].data)}
+        </text>
+        <text x="${coords[coords.length - 1].x.toFixed(1)}" y="${H - 10}" text-anchor="end" font-size="9" fill="var(--fraca)">
+          ${dia(pontos[pontos.length - 1].data)}
+        </text>
+
+        <!-- Área sombreada sob a curva -->
+        <path d="${dArea}" fill="url(#grad-historico-preco)"/>
+
+        <!-- Linha suave de preço -->
+        <path d="${dLinha}" fill="none" stroke="var(--verde)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+        <!-- Linha vertical de scrubbing (oculta inicialmente) -->
+        <line id="scrub-linha-guia" y1="${padTop}" y2="${bottomY}" stroke="var(--tinta)" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.6" hidden/>
+
+        <!-- Pontos -->
+        ${pontosSvg}
+
+        <!-- Ponto em foco do scrubbing (oculto inicialmente) -->
+        <circle id="scrub-ponto-foco" r="6.5" fill="var(--tinta)" stroke="var(--painel)" stroke-width="2.5" hidden/>
+      </svg>
+      <div class="grafico-legenda" style="display:flex;gap:.8rem;font-size:.78rem;color:var(--fraca);margin-top:.4rem;align-items:center;flex-wrap:wrap">
+        <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:4px"></span>menor pago</span>
+        <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ef4444;margin-right:4px"></span>maior pago</span>
+        <span><span style="display:inline-block;width:12px;border-bottom:1px dashed var(--fraca);margin-right:4px;vertical-align:middle"></span>mediana</span>
+        <span style="margin-left:auto;font-style:italic">Arraste o dedo no gráfico para detalhes</span>
+      </div>
+    </div>`;
+}
+
+function ativarInteracaoGraficoHistorico(p) {
+  const svg = document.getElementById('svg-grafico-historico');
+  const tooltip = document.getElementById('tooltip-grafico-historico');
+  const linhaGuia = document.getElementById('scrub-linha-guia');
+  const pontoFoco = document.getElementById('scrub-ponto-foco');
+  if (!svg || !tooltip || !linhaGuia || !pontoFoco || !p || !p.compras || p.compras.length < 2) return;
+
+  const pontos = p.compras.slice().reverse();
+  const W = 500;
+  const H = 200;
+  const padLeft = 45;
+  const padRight = 30;
+  const padTop = 30;
+  const padBottom = 35;
+  const plotW = W - padLeft - padRight;
+  const plotH = H - padTop - padBottom;
+
+  const valores = pontos.map((pt) => Number(pt.valor_unitario));
+  const minVal = Math.min(...valores);
+  const maxVal = Math.max(...valores);
+  const range = maxVal === minVal ? (maxVal || 1) * 0.2 : (maxVal - minVal);
+  const yMin = Math.max(0, minVal - range * 0.15);
+  const yMax = maxVal + range * 0.15;
+  const ySpan = (yMax - yMin) || 1;
+
+  const coords = pontos.map((pt, i) => {
+    const x = padLeft + (i / (pontos.length - 1)) * plotW;
+    const y = padTop + plotH - ((Number(pt.valor_unitario) - yMin) / ySpan) * plotH;
+    return { x, y, pt, i };
+  });
+
+  let ultimoIdx = -1;
+
+  function atualizarScrub(e) {
+    const rect = svg.getBoundingClientRect();
+    const clientX = e.clientX ?? (e.touches && e.touches[0]?.clientX);
+    if (clientX == null) return;
+    const svgX = ((clientX - rect.left) / rect.width) * W;
+
+    let closest = coords[0];
+    let menorDist = Math.abs(coords[0].x - svgX);
+    for (let i = 1; i < coords.length; i++) {
+      const d = Math.abs(coords[i].x - svgX);
+      if (d < menorDist) {
+        menorDist = d;
+        closest = coords[i];
+      }
+    }
+
+    if (closest.i !== ultimoIdx) {
+      navigator.vibrate?.(10);
+      ultimoIdx = closest.i;
+    }
+
+    linhaGuia.setAttribute('x1', closest.x.toFixed(1));
+    linhaGuia.setAttribute('x2', closest.x.toFixed(1));
+    linhaGuia.hidden = false;
+
+    pontoFoco.setAttribute('cx', closest.x.toFixed(1));
+    pontoFoco.setAttribute('cy', closest.y.toFixed(1));
+    pontoFoco.hidden = false;
+
+    const pt = closest.pt;
+    tooltip.hidden = false;
+    tooltip.innerHTML = `
+      <div style="font-weight:700;font-size:.95rem;color:var(--verde)">${dinheiro(pt.valor_unitario)}</div>
+      <div style="font-size:.8rem;color:var(--tinta);margin-top:2px">${dia(pt.data)} · ${pt.loja || 'loja não informada'}</div>
+      <div style="font-size:.75rem;color:var(--fraca)">Qtd: ${quantia(pt.quantidade)} ${pt.unidade || ''} (total ${dinheiro(pt.valor_total)})</div>`;
+
+    const pctX = (closest.x / W) * 100;
+    const pctY = (closest.y / H) * 100;
+    tooltip.style.left = `${pctX}%`;
+    tooltip.style.top = `${Math.max(8, pctY - 18)}%`;
+    if (pctX < 25) {
+      tooltip.style.transform = 'translate(0%, -105%)';
+    } else if (pctX > 75) {
+      tooltip.style.transform = 'translate(-100%, -105%)';
+    } else {
+      tooltip.style.transform = 'translate(-50%, -105%)';
+    }
+  }
+
+  function finalizarScrub() {
+    linhaGuia.hidden = true;
+    pontoFoco.hidden = true;
+    tooltip.hidden = true;
+    ultimoIdx = -1;
+  }
+
+  svg.addEventListener('pointerdown', (e) => {
+    svg.setPointerCapture?.(e.pointerId);
+    atualizarScrub(e);
+  });
+  svg.addEventListener('pointermove', (e) => {
+    if (e.buttons > 0 || e.pointerType === 'touch') {
+      atualizarScrub(e);
+    }
+  });
+  svg.addEventListener('pointerup', finalizarScrub);
+  svg.addEventListener('pointercancel', finalizarScrub);
+  svg.addEventListener('mouseleave', finalizarScrub);
+}
+
 window.verProduto = async (id) => {
   const p = await api('/api/produto/' + id);
   const compras = p.compras.map((c) => `
     <tr><td>${dia(c.data)}<div class="fraca">${c.loja}</div></td>
         <td class="num">${dinheiro(c.valor_unitario)}<div class="fraca">${quantia(c.quantidade)} ${c.unidade || ''}</div></td></tr>`).join('');
+  const graficoHtml = renderizarGraficoHistorico(p);
   $('#produto-detalhe').innerHTML = `
     <div class="cartao" style="margin-top:.9rem">
       <div class="linha"><strong>${p.descricao}</strong>
@@ -564,9 +824,12 @@ window.verProduto = async (id) => {
         <span class="num">${dinheiro(p.mediana_paga)}</span></div>
       <div class="linha"><span class="fraca">maior pago</span>
         <span class="num">${dinheiro(p.maior_pago)}</span></div>
+      <h2>Histórico de preços</h2>
+      ${graficoHtml}
       <h2>Suas compras</h2>
       <table>${compras || '<tr><td class="fraca">sem compras</td></tr>'}</table>
     </div>`;
+  ativarInteracaoGraficoHistorico(p);
   $('#produto-detalhe').scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
 

@@ -366,6 +366,30 @@ svg.grafico text { fill: var(--fraca); font-size: 10px; }
   color: var(--verde); font-weight: 500;
 }
 
+/* ── gráfico de histórico de preços por produto em svg nativo ───────────── */
+.grafico-historico-container {
+  position: relative; width: 100%; margin: 1rem 0;
+}
+svg.grafico-historico {
+  width: 100%; height: auto; min-height: 180px; max-height: 220px;
+  display: block; overflow: visible; border-radius: 8px;
+  background: var(--fundo); border: 1px solid var(--borda);
+}
+.tooltip-grafico {
+  position: absolute; pointer-events: none;
+  background: var(--painel); border: 1px solid var(--borda);
+  border-radius: 8px; padding: .5rem .75rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+  white-space: nowrap; z-index: 25;
+  transition: opacity .1s ease-out;
+}
+.grafico-fallback-um {
+  padding: 1rem; border: 1px dashed var(--borda);
+  border-radius: 8px; background: var(--fundo);
+  margin: .6rem 0; text-align: center;
+}
+
+
 
 
 
