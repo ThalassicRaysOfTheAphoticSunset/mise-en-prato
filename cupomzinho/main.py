@@ -57,6 +57,7 @@ from .nfce_pr import (
     interpretar,
     validar_chave,
 )
+from .ocr import interpretar_cupom_ocr
 from .qr import ler_qr
 
 WEB = Path(__file__).parent / "web"
@@ -249,10 +250,14 @@ async def enviar_cupom(envio: EnvioCupom, quem: Morador, con: Banco):
 
 @app.post("/api/cupom/foto")
 async def enviar_foto(quem: Morador, con: Banco, foto: Annotated[UploadFile, File()]):
-    """Foto do QR Code do cupom. Quem decodifica é o servidor.
+    """Foto do QR Code ou do cupom inteiro. Quem decodifica e processa é o servidor.
 
-    É isto que faz o iPhone funcionar: o Safari não tem BarcodeDetector, então
-    depender do navegador deixaria metade da casa de fora.
+    1. Tenta ler o QR Code (caminho rápido para obter a chave e consultar a SEFAZ).
+    2. Se não houver QR Code legível, executa o pipeline de OCR local (Tesseract + Pillow).
+    3. Se o OCR encontrar a chave de 44 dígitos com DV válido, busca no portal da SEFAZ.
+    4. Se for cupom sem chave (ou se a SEFAZ falhar), grava os dados lidos do papel diretamente.
+       - Centavos fechando: gravado como completo = 1.
+       - Divergência: gravado como completo = 0 e direcionado para a fila de revisão.
     """
     bruto = await foto.read()
     try:
@@ -265,19 +270,46 @@ async def enviar_foto(quem: Morador, con: Banco, foto: Annotated[UploadFile, Fil
         if chave_da_url(conteudo):
             return responder(_registrar(con, conteudo, quem, "foto"))
 
-    # A foto que não deu certo fica guardada. Consertar leitor de código de
-    # barras sem o arquivo que falhou é adivinhação; com ele, é teste.
+    # Pipeline de OCR local no servidor
+    try:
+        cupom_ocr = interpretar_cupom_ocr(bruto)
+    except Exception as erro_ocr:
+        log.warning("Falha ao processar OCR da foto: %s", erro_ocr)
+        cupom_ocr = None
+
+    if cupom_ocr and (cupom_ocr.itens or validar_chave(cupom_ocr.chave)):
+        # Se achou chave NFC-e válida de 44 dígitos no papel, tenta a SEFAZ
+        if validar_chave(cupom_ocr.chave):
+            url_consulta = f"https://www.fazenda.pr.gov.br/nfce/qrcode?p={cupom_ocr.chave}|2|1|1"
+            try:
+                html = buscar(url_consulta)
+                _guardar_html(cupom_ocr.chave, html)
+                return responder(_gravar(con, cupom_ocr.chave, interpretar(html), quem, "foto"))
+            except Exception as e_sefaz:
+                log.info(
+                    "SEFAZ não retornou via QR simplificado da chave (%s); gravando itens do OCR",
+                    e_sefaz,
+                )
+
+        era_novo = cupons.gravar(con, cupom_ocr, morador=quem, origem="foto")
+        return responder({
+            "novo": era_novo,
+            "cupom": cupons.ler(con, cupom_ocr.chave),
+            "origem": "foto",
+            "ocr": True,
+        })
+
+    # A foto que não deu certo em nenhum leitor fica guardada
     guardada = _guardar_falha(bruto, foto.filename or "foto")
-    log.warning("QR não encontrado; foto guardada em %s", guardada)
+    log.warning("QR e OCR não reconheceram a foto; guardada em %s", guardada)
 
     if achados:
-        # Achou QR, mas não era de cupom — o cupom tem outros códigos impressos.
         raise HTTPException(
             422, "achei um código nessa foto, mas não é o QR da nota fiscal. "
                  "O certo é o quadradinho embaixo, perto da chave de acesso.")
     raise HTTPException(
-        422, "não achei nenhum QR Code nessa foto. A foto ficou guardada no "
-             "servidor para eu descobrir por quê — tente também colar o link.")
+        422, "não achei nenhum QR Code legível nem texto de cupom nesta foto. "
+             "A foto ficou guardada no servidor para análise.")
 
 
 @app.post("/api/cupom/html")

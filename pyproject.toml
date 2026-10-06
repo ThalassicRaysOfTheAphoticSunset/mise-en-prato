@@ -20,6 +20,7 @@ dependencies = [
     # Wheel manylinux, sem pacote apt atrás — ao contrário do libzbar0.
     "zxing-cpp>=2.2",
     "pillow>=11",
+    "pytesseract>=0.3.10",
 ]
 
 [tool.setuptools]

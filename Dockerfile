@@ -4,10 +4,9 @@
 FROM python:3.13-slim AS base
 
 # libzbar0 é exigência do pyzbar, que decodifica o QR do cupom a partir da foto.
-# É o que faz o iPhone funcionar: o Safari não tem BarcodeDetector, então quem
-# lê o código é o servidor, não o navegador.
+# tesseract-ocr e tesseract-ocr-por são usados no OCR local de cupons sem NFC-e/QR.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libzbar0 \
+ && apt-get install -y --no-install-recommends libzbar0 tesseract-ocr tesseract-ocr-por \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
