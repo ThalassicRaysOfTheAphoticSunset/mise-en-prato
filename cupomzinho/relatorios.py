@@ -113,6 +113,36 @@ def resumo_do_mes(con: sqlite3.Connection, mes: str | None = None) -> dict:
              GROUP BY i.produto_id ORDER BY total DESC LIMIT 15""", (mes,))
     ]
 
+    # Perfil nutricional (Classificação NOVA de ultraprocessados)
+    rotulos_nova = {
+        1: "In natura / minimamente processados",
+        2: "Ingredientes culinários",
+        3: "Alimentos processados",
+        4: "Alimentos ultraprocessados",
+    }
+    por_nova = [
+        {
+            "grupo": r["nova_group"],
+            "rotulo": rotulos_nova.get(r["nova_group"], f"Grupo {r['nova_group']}"),
+            "total": reais(r["total"]),
+            "itens": r["itens"],
+        }
+        for r in con.execute("""
+            SELECT p.nova_group, SUM(i.total_centavos) AS total, COUNT(*) AS itens
+              FROM item i
+              JOIN cupom c ON c.chave = i.chave
+              JOIN produto p ON p.id = i.produto_id
+             WHERE strftime('%Y-%m', c.emitido_em) = ? AND p.nova_group IS NOT NULL
+             GROUP BY p.nova_group ORDER BY p.nova_group""", (mes,))
+    ]
+    total_classificado = sum((n["total"] for n in por_nova), Decimal("0.00"))
+    gasto_ultra = next((n["total"] for n in por_nova if n["grupo"] == 4), Decimal("0.00"))
+    pct_ultra = (
+        round(float(gasto_ultra / total_classificado * 100), 1)
+        if total_classificado > 0
+        else 0.0
+    )
+
     return {
         "mes": mes, "total": total,
         "mes_anterior": anterior, "total_anterior": total_anterior,
@@ -122,6 +152,11 @@ def resumo_do_mes(con: sqlite3.Connection, mes: str | None = None) -> dict:
             (mes,)).fetchone()[0],
         "por_loja": por_loja, "por_morador": por_morador,
         "por_categoria": por_categoria, "maiores": maiores,
+        "perfil_nutricional": {
+            "por_nova": por_nova,
+            "total_classificado": total_classificado,
+            "percentual_ultraprocessados": pct_ultra,
+        },
     }
 
 
@@ -131,6 +166,8 @@ def produtos(con: sqlite3.Connection, busca: str = "", limite: int = 100) -> lis
     return [
         {"id": r["id"], "descricao": r["apelido"] or r["descricao_canonica"],
          "gtin": r["gtin"], "categoria": r["categoria"],
+         "marca": r["marca"], "nutriscore": r["nutriscore"],
+         "nova_group": r["nova_group"], "foto_url": r["foto_url"],
          "acompanhar": bool(r["acompanhar"]), "compras": r["compras"],
          "gasto": reais(r["gasto"] or 0), "ultimo": reais(r["ultimo"]),
          **_quanto(r)}
@@ -187,6 +224,10 @@ def historico_do_produto(con: sqlite3.Connection, produto_id: int) -> dict:
         "descricao": produto["apelido"] or produto["descricao_canonica"],
         "descricao_canonica": produto["descricao_canonica"],
         "gtin": produto["gtin"], "categoria": produto["categoria"],
+        "marca": produto["marca"],
+        "nutriscore": produto["nutriscore"],
+        "nova_group": produto["nova_group"],
+        "foto_url": produto["foto_url"],
         "acompanhar": bool(produto["acompanhar"]),
         "total_compras": len({c["data"] for c in compras}),
         # Só soma se a unidade for a mesma em todas as compras — somar 2 CX com

@@ -106,6 +106,15 @@ def _produto_de(con: sqlite3.Connection, cnpj: str, descricao: str, *,
     return produto_id
 
 
+def _tentar_enriquecimento_local(con: sqlite3.Connection, produto_id: int) -> None:
+    """Tenta enriquecer o produto a partir do catálogo satélite offline, se disponível."""
+    try:
+        from .enriquecimento import enriquecer_local
+        enriquecer_local(con, produto_id)
+    except Exception:
+        pass
+
+
 def foto_de_falha_proxima(criado_em_str: str | None) -> str | None:
     """Acha a foto em falhas/ mais próxima do momento em que o cupom foi criado."""
     if not criado_em_str:
@@ -184,6 +193,7 @@ def gravar(con: sqlite3.Connection, cupom: Cupom, *, morador: str,
                             WHERE id = ?""",
                         (item.gtin, item.ncm, produto_id),
                     )
+                _tentar_enriquecimento_local(con, produto_id)
                 con.execute(
                     """INSERT OR IGNORE INTO preco
                            (produto_id, cnpj, unitario_centavos, observado_em, fonte)
@@ -231,6 +241,7 @@ def gravar(con: sqlite3.Connection, cupom: Cupom, *, morador: str,
                         WHERE id = ?""",
                     (item.gtin, item.ncm, produto_id),
                 )
+            _tentar_enriquecimento_local(con, produto_id)
             # O preço pago entra na MESMA série que o Menor Preço alimenta.
             # OR IGNORE porque duas linhas idênticas do mesmo cupom (o atum
             # comprado duas vezes) são uma observação de preço só.
@@ -380,6 +391,7 @@ def revisar(con: sqlite3.Connection, chave: str, novos_itens: list[dict], *,
                         WHERE id = ?""",
                     (it["gtin"], it["ncm"], produto_id)
                 )
+            _tentar_enriquecimento_local(con, produto_id)
             con.execute(
                 """INSERT OR IGNORE INTO preco
                        (produto_id, cnpj, unitario_centavos, observado_em, fonte)

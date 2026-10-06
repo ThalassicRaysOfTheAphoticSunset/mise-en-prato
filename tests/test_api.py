@@ -383,3 +383,52 @@ def test_revisar_cupom_endpoint(cliente):
     assert not any(c["chave"] == quebrado.chave for c in corpo_depois["revisao"])
 
 
+def test_gastos_inclui_perfil_nutricional(cliente):
+    agosto = cliente.get("/api/gastos?mes=2026-08").json()
+    assert "perfil_nutricional" in agosto["resumo"]
+    nutri = agosto["resumo"]["perfil_nutricional"]
+    assert "por_nova" in nutri
+    assert "total_classificado" in nutri
+    assert "percentual_ultraprocessados" in nutri
+
+
+def test_catalogo_status_sem_inicializar(cliente):
+    r = cliente.get("/api/catalogo/status")
+    assert r.status_code == 200
+    dados = r.json()
+    assert dados["disponivel"] is False
+
+
+def test_catalogo_status_e_enriquecimento_local(cliente, tmp_path):
+    from cupomzinho.catalogo import conectar_catalogo, inserir_produtos
+    from cupomzinho.config import config
+
+    caminho_cat = config().banco_catalogo
+    cat = conectar_catalogo(caminho_cat, criar=True)
+    inserir_produtos(cat, [
+        {
+            "gtin": "7891167011779",
+            "nome": "ATUM GOM COSTA RALADO NAT 170G",
+            "marca": "GOMES DA COSTA",
+            "nutriscore": "A",
+            "nova_group": 3,
+            "origem": "openfoodfacts",
+        }
+    ])
+    cat.close()
+
+    # Status agora deve reportar disponível
+    r_status = cliente.get("/api/catalogo/status")
+    assert r_status.status_code == 200
+    dados_status = r_status.json()
+    assert dados_status["disponivel"] is True
+    assert dados_status["total"] == 1
+
+    # Dispara enriquecimento local
+    r_enriq = cliente.post("/api/enriquecer/local?quantos=50")
+    assert r_enriq.status_code == 200
+    dados_enriq = r_enriq.json()
+    assert "identificados" in dados_enriq
+    assert any(i["gtin"] == "7891167011779" for i in dados_enriq["identificados"])
+
+

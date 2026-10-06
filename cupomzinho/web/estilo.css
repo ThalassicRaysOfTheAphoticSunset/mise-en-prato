@@ -389,6 +389,46 @@ svg.grafico-historico {
   margin: .6rem 0; text-align: center;
 }
 
+/* ── catálogo e perfil nutricional ────────────────────────────────────────── */
+.badge-nova {
+  font-size: .72rem; font-weight: 700; padding: .1rem .45rem; border-radius: 6px;
+  display: inline-flex; align-items: center; gap: .2rem;
+}
+.badge-nova.nova-1 { background: rgba(34, 197, 94, .18); color: #16a34a; }
+.badge-nova.nova-2 { background: rgba(234, 179, 8, .18); color: #ca8a04; }
+.badge-nova.nova-3 { background: rgba(249, 115, 22, .18); color: #ea580c; }
+.badge-nova.nova-4 { background: rgba(239, 68, 68, .18); color: #dc2626; }
+
+.badge-nutri {
+  font-size: .72rem; font-weight: 800; padding: .1rem .4rem; border-radius: 4px;
+  text-transform: uppercase; display: inline-block; letter-spacing: .02em;
+}
+.badge-nutri.nutri-a { background: #038141; color: #fff; }
+.badge-nutri.nutri-b { background: #85bb2f; color: #fff; }
+.badge-nutri.nutri-c { background: #fecb02; color: #111; }
+.badge-nutri.nutri-d { background: #ee8100; color: #fff; }
+.badge-nutri.nutri-e { background: #e63e11; color: #fff; }
+
+.produto-thumb {
+  width: 52px; height: 52px; object-fit: contain; border-radius: 8px;
+  background: #fff; border: 1px solid var(--borda); flex-shrink: 0; padding: 2px;
+}
+
+.barra-nutri-progresso {
+  display: flex; height: 10px; border-radius: 999px; overflow: hidden;
+  background: var(--borda); margin: .6rem 0 .4rem;
+}
+.fatia-nova { height: 100%; }
+.fatia-nova-1 { background: #16a34a; }
+.fatia-nova-2 { background: #ca8a04; }
+.fatia-nova-3 { background: #ea580c; }
+.fatia-nova-4 { background: #dc2626; }
+
+.btn-secundario {
+  background: transparent; color: var(--tinta); border: 1px solid var(--borda);
+  border-radius: 10px; padding: .6rem .9rem; font: inherit; font-weight: 600; cursor: pointer;
+}
+
 
 
 

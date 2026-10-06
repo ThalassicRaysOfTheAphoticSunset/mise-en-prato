@@ -15,8 +15,8 @@ jobs:
         with:
           python-version: "3.13"
 
-      # exigência do pyzbar, que decodifica o QR do cupom a partir da foto
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libzbar0
+      # exigência do pyzbar e do OCR local (Tesseract)
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libzbar0 tesseract-ocr tesseract-ocr-por
 
       - run: pip install ".[dev]"
 

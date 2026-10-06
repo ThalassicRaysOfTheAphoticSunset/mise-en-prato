@@ -435,6 +435,45 @@ carregadores.gastos = async () => {
              (${dinheiro(resumo.total_anterior)})`}
       </div>
     </div>`;
+
+  const nutri = resumo.perfil_nutricional;
+  const caixaNutri = $('#perfil-nutricional-secao');
+  if (caixaNutri) {
+    if (nutri && Number(nutri.total_classificado) > 0) {
+      const totalClass = Number(nutri.total_classificado);
+      const fatias = nutri.por_nova.map((g) => {
+        const pct = (Number(g.total) / totalClass) * 100;
+        return `<div class="fatia-nova fatia-nova-${g.grupo}" style="width:${pct.toFixed(1)}%" title="${g.rotulo}: ${pct.toFixed(0)}%"></div>`;
+      }).join('');
+
+      const linhasGrupos = nutri.por_nova.map((g) => {
+        const pct = ((Number(g.total) / totalClass) * 100).toFixed(0);
+        return `
+          <div class="linha" style="font-size:.85rem;margin-top:.35rem">
+            <span><span class="badge-nova nova-${g.grupo}">NOVA ${g.grupo}</span> ${g.rotulo}</span>
+            <span class="num">${dinheiro(g.total)} <span class="fraca">(${pct}%)</span></span>
+          </div>`;
+      }).join('');
+
+      caixaNutri.innerHTML = `
+        <div class="cartao">
+          <div class="linha">
+            <strong>Qualidade Alimentar da Cesta</strong>
+            <span class="selo ${nutri.percentual_ultraprocessados > 40 ? 'aviso' : ''}">
+              ${nutri.percentual_ultraprocessados}% ultraprocessados
+            </span>
+          </div>
+          <div class="barra-nutri-progresso">${fatias}</div>
+          <div class="fraca" style="font-size:.78rem;margin-bottom:.6rem">
+            Classificação NOVA · ${dinheiro(nutri.total_classificado)} de compras identificadas
+          </div>
+          ${linhasGrupos}
+        </div>`;
+    } else {
+      caixaNutri.innerHTML = '';
+    }
+  }
+
   $('#grafico-meses').innerHTML = grafico(meses, resumo.mes);
   $('#por-loja').innerHTML = barras(resumo.por_loja, 'loja');
   $('#por-morador').innerHTML = barras(resumo.por_morador, 'morador');
@@ -496,16 +535,49 @@ window.recusarPar = async (desc_a, desc_b) => {
 
 async function desenharEnriquecimento() {
   const { pendentes } = await api('/api/enriquecer');
+  let statusCat = { disponivel: false };
+  try {
+    statusCat = await api('/api/catalogo/status');
+  } catch (_) {}
+
   $('#enriquecer').innerHTML = !pendentes.length ? '' : `
     <div class="cartao">
       <div class="linha"><strong>${pendentes.length} produtos sem código de barras</strong></div>
-      <div class="fraca" style="margin:.3rem 0 .6rem">Sem ele, o mesmo item escrito
-        diferente em cada loja não se reconhece. Consultar o Menor Preço identifica
-        os mais comprados — uma consulta por produto, só quando você pedir.</div>
-      <button class="acao" onclick="descobrirCodigos()">Descobrir os 5 mais comprados</button>
+      <div class="fraca" style="margin:.3rem 0 .6rem">
+        Sem código de barras, itens iguais com escritas diferentes na nota não se reconhecem.
+        ${statusCat.disponivel
+          ? `O catálogo satélite local tem ${statusCat.total} produtos prontos para casamento offline instantâneo.`
+          : 'Dumps do Open Food Facts e CMED podem resolver os itens offline.'}
+      </div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        ${statusCat.disponivel ? `
+          <button class="acao" onclick="enriquecerPeloCatalogoLocal()">
+            Resolver offline no Catálogo (${statusCat.total})
+          </button>` : ''}
+        <button class="${statusCat.disponivel ? 'btn-secundario' : 'acao'}" onclick="descobrirCodigos()">
+          Consultar Menor Preço (5 por vez)
+        </button>
+      </div>
       <div id="enriquecer-estado"></div>
     </div>`;
 }
+
+window.enriquecerPeloCatalogoLocal = async () => {
+  const caixa = $('#enriquecer-estado');
+  caixa.innerHTML = '<div class="estado">Buscando no catálogo local satélite (offline)…</div>';
+  try {
+    const r = await api('/api/enriquecer/local?quantos=100', { method: 'POST' });
+    caixa.innerHTML = `
+      <div class="estado">
+        ${r.identificados.length} identificados offline · ${r.restantes} ainda pendentes
+      </div>
+      ${r.identificados.map((p) => `<div class="linha"><span>${p.descricao}</span>
+        <span class="selo">${p.gtin}</span></div>`).join('')}`;
+    carregadores.produtos();
+  } catch (erro) {
+    caixa.innerHTML = `<div class="estado ruim">${erro.message}</div>`;
+  }
+};
 
 window.descobrirCodigos = async () => {
   const caixa = $('#enriquecer-estado');
@@ -535,7 +607,13 @@ carregadores.produtos = async () => {
   $('#lista-produtos').innerHTML = produtos.length
     ? produtos.map((p) => `
         <div class="linha clicavel" onclick="verProduto(${p.id})">
-          <div>${p.descricao}
+          <div>
+            <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+              <span>${p.descricao}</span>
+              ${p.marca ? `<span class="fraca" style="font-size:.78rem">· ${p.marca}</span>` : ''}
+              ${p.nutriscore ? `<span class="badge-nutri nutri-${p.nutriscore.toLowerCase()}">${p.nutriscore}</span>` : ''}
+              ${p.nova_group ? `<span class="badge-nova nova-${p.nova_group}">NOVA ${p.nova_group}</span>` : ''}
+            </div>
             <div class="fraca">${quanto(p.quantidade, p.unidade)} em ${p.compras}
               ${p.compras > 1 ? 'compras' : 'compra'} · último ${dinheiro(p.ultimo)}
               ${p.gtin ? '' : '· <span class="selo">sem código de barras</span>'}</div>
@@ -812,8 +890,20 @@ window.verProduto = async (id) => {
   const graficoHtml = renderizarGraficoHistorico(p);
   $('#produto-detalhe').innerHTML = `
     <div class="cartao" style="margin-top:.9rem">
-      <div class="linha"><strong>${p.descricao}</strong>
-        ${p.gtin ? `<span class="selo">${p.gtin}</span>` : ''}</div>
+      <div style="display:flex;gap:.8rem;align-items:center;margin-bottom:.6rem">
+        ${p.foto_url ? `<img src="${p.foto_url}" alt="${p.descricao}" class="produto-thumb" loading="lazy">` : ''}
+        <div style="flex:1">
+          <div class="linha">
+            <strong>${p.descricao}</strong>
+            ${p.gtin ? `<span class="selo">${p.gtin}</span>` : ''}
+          </div>
+          <div style="display:flex;gap:.4rem;align-items:center;margin-top:.25rem;flex-wrap:wrap">
+            ${p.marca ? `<span class="fraca" style="font-size:.82rem">${p.marca}</span>` : ''}
+            ${p.nutriscore ? `<span class="badge-nutri nutri-${p.nutriscore.toLowerCase()}">Nutri-Score ${p.nutriscore}</span>` : ''}
+            ${p.nova_group ? `<span class="badge-nova nova-${p.nova_group}">NOVA ${p.nova_group}</span>` : ''}
+          </div>
+        </div>
+      </div>
       <div class="linha" style="margin-top:.6rem">
         <span class="fraca">comprado</span>
         <span class="num">${quanto(p.quantidade_total, p.unidade) || '—'}

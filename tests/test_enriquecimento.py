@@ -9,8 +9,15 @@ from pathlib import Path
 import pytest
 
 from cupomzinho.banco import conectar
+from cupomzinho.catalogo import conectar_catalogo, inserir_produtos
 from cupomzinho.cupons import gravar
-from cupomzinho.enriquecimento import enriquecer, escolher_gtin, pendentes
+from cupomzinho.enriquecimento import (
+    enriquecer,
+    enriquecer_local,
+    enriquecer_pendentes_local,
+    escolher_gtin,
+    pendentes,
+)
 from cupomzinho.nfce_pr import interpretar
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cupom_lar_2026-08-14.html"
@@ -205,4 +212,121 @@ def test_tentativa_e_marcada_mesmo_dando_certo(con):
     marcado = con.execute(
         "SELECT gtin_buscado_em FROM produto WHERE id = ?", (produto_id,)).fetchone()[0]
     assert marcado
+
+
+# ── testes do banco satélite (catalogo.db) no enriquecimento ─────────────────
+@pytest.fixture
+def cat_con(tmp_path):
+    caminho = tmp_path / "catalogo_mock.db"
+    cat = conectar_catalogo(caminho, criar=True)
+    itens = [
+        {
+            "gtin": GTIN,
+            "nome": ATUM,
+            "marca": "GOMES DA COSTA",
+            "categoria": "Enlatados",
+            "ncm": "16042010",
+            "nutriscore": "A",
+            "nova_group": 3,
+            "foto_url": "https://off.org/atum.jpg",
+            "origem": "openfoodfacts",
+        },
+        {
+            "gtin": "7891000100103",
+            "nome": "LEITE UHT INTEGRAL 1L",
+            "marca": "PIRACANJUBA",
+            "categoria": "Laticínios",
+            "ncm": "04012010",
+            "nutriscore": "B",
+            "nova_group": 1,
+            "foto_url": "https://off.org/leite.jpg",
+            "origem": "openfoodfacts",
+        },
+    ]
+    inserir_produtos(cat, itens)
+    yield cat
+    cat.close()
+
+
+def test_enriquecer_local_por_gtin_preexistente(con, cat_con):
+    """Produto já tem GTIN: catálogo local enriquece metadados e nutrição."""
+    produto_id = con.execute(
+        "SELECT id FROM produto WHERE descricao_canonica = ?", (ATUM,)
+    ).fetchone()[0]
+    con.execute("UPDATE produto SET gtin = ? WHERE id = ?", (GTIN, produto_id))
+    con.commit()
+
+    r = enriquecer_local(con, produto_id, con_catalogo=cat_con)
+    assert r["novo"] is True
+    assert "metadados enriquecidos" in r["motivo"]
+
+    salvo = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    assert salvo["marca"] == "GOMES DA COSTA"
+    assert salvo["nutriscore"] == "A"
+    assert salvo["nova_group"] == 3
+    assert salvo["foto_url"] == "https://off.org/atum.jpg"
+
+
+def test_enriquecer_local_por_descricao_exata(con, cat_con):
+    """Produto sem GTIN tem nome exato no catálogo: resolve GTIN e nutrição offline."""
+    produto_id = con.execute(
+        "SELECT id FROM produto WHERE descricao_canonica = ?", (ATUM,)
+    ).fetchone()[0]
+
+    r = enriquecer_local(con, produto_id, con_catalogo=cat_con)
+    assert r["novo"] is True
+    assert r["gtin"] == GTIN
+
+    salvo = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    assert salvo["gtin"] == GTIN
+    assert salvo["marca"] == "GOMES DA COSTA"
+    assert salvo["nova_group"] == 3
+
+
+def test_enriquecer_degrau_1_catalogo_evita_chamada_ao_menor_preco(con, cat_con):
+    """Se o catálogo local resolve, Menor Preço NÃO é chamado (0 chamadas, poupa teto)."""
+    produto_id = con.execute(
+        "SELECT id FROM produto WHERE descricao_canonica = ?", (ATUM,)
+    ).fetchone()[0]
+    cliente = ClienteFalso([])
+
+    r = enriquecer(con, cliente, produto_id, con_catalogo=cat_con)
+    assert r["novo"] is True
+    assert r["gtin"] == GTIN
+    assert cliente.consultas == []  # Nenhuma consulta feita ao Menor Preço!
+
+
+def test_enriquecer_degrau_2_puxa_nutricao_do_catalogo_apos_menor_preco(con, cat_con):
+    """Se Menor Preço acha o GTIN, enriquece em seguida a nutrição pelo catálogo local."""
+    # Renomeia temporariamente a descrição no banco para algo abreviado que não bate no catálogo
+    produto_id = con.execute(
+        "SELECT id FROM produto WHERE descricao_canonica = ?", (ATUM,)
+    ).fetchone()[0]
+    con.execute(
+        "UPDATE produto SET descricao_canonica = 'ATUM GOM COSTA 170G' WHERE id = ?",
+        (produto_id,),
+    )
+    con.commit()
+
+    cliente = ClienteFalso([
+        resultado("ATUM GOM COSTA 170G", GTIN, "LAR COOPERATIVA AGROINDUSTRIAL")
+    ])
+    r = enriquecer(con, cliente, produto_id, con_catalogo=cat_con)
+
+    assert r["novo"] is True
+    assert r["gtin"] == GTIN
+    assert cliente.consultas == ["ATUM GOM COSTA 170G"]
+
+    salvo = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    assert salvo["gtin"] == GTIN
+    assert salvo["marca"] == "GOMES DA COSTA"
+    assert salvo["nutriscore"] == "A"
+    assert salvo["nova_group"] == 3
+
+
+def test_enriquecer_pendentes_local_em_lote(con, cat_con):
+    """Varre pendentes e enriquece tudo o que der match local sem chamar API externa."""
+    relatorio = enriquecer_pendentes_local(con, con_catalogo=cat_con)
+    assert len(relatorio["identificados"]) >= 1
+    assert any(i["gtin"] == GTIN for i in relatorio["identificados"])
 

@@ -26,6 +26,7 @@ import re
 import sqlite3
 
 from .banco import reais
+from .catalogo import buscar_por_gtin, buscar_por_termo, conectar_catalogo
 from .nfce_pr import normalizar
 from .sanidade import digito_gtin_confere
 
@@ -84,45 +85,225 @@ def escolher_gtin(descricao: str, achados: list[dict], *,
             "motivo": f"{len(codigos)} códigos diferentes para a mesma descrição — ambíguo"}
 
 
-def aplicar(con: sqlite3.Connection, produto_id: int, gtin: str, ncm: str | None) -> None:
+def aplicar(
+    con: sqlite3.Connection,
+    produto_id: int,
+    gtin: str,
+    ncm: str | None = None,
+    *,
+    marca: str | None = None,
+    nutriscore: str | None = None,
+    nova_group: int | None = None,
+    foto_url: str | None = None,
+) -> None:
     with con:
         con.execute(
-            "UPDATE produto SET gtin = ?, ncm = COALESCE(ncm, ?) WHERE id = ?",
-            (gtin, ncm, produto_id))
+            """UPDATE produto
+                  SET gtin = COALESCE(?, gtin),
+                      ncm = COALESCE(ncm, ?),
+                      marca = COALESCE(marca, ?),
+                      nutriscore = COALESCE(nutriscore, ?),
+                      nova_group = COALESCE(nova_group, ?),
+                      foto_url = COALESCE(foto_url, ?)
+                WHERE id = ?""",
+            (gtin, ncm, marca, nutriscore, nova_group, foto_url, produto_id),
+        )
 
 
-def enriquecer(con: sqlite3.Connection, cliente, produto_id: int) -> dict:
-    """Uma consulta ao Menor Preço para descobrir o GTIN de um produto."""
+def enriquecer_local(
+    con: sqlite3.Connection,
+    produto_id: int,
+    con_catalogo: sqlite3.Connection | None = None,
+) -> dict:
+    """Enriquece produto utilizando o banco satélite local (catalogo.db).
+
+    Zero chamadas de rede, sem risco de rate limit.
+    """
     produto = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
     if not produto:
         raise ValueError("produto não encontrado")
-    if produto["gtin"]:
-        return {"produto_id": produto_id, "gtin": produto["gtin"],
-                "motivo": "já tinha código de barras", "novo": False}
-    if produto["is_granel"]:
-        return {"produto_id": produto_id, "descricao": produto["descricao_canonica"],
-                "gtin": None,
-                "motivo": "produto a granel não possui código de barras comercial",
-                "novo": False}
 
+    if produto["is_granel"]:
+        return {
+            "produto_id": produto_id,
+            "descricao": produto["descricao_canonica"],
+            "gtin": None,
+            "motivo": "produto a granel não possui código de barras comercial",
+            "novo": False,
+        }
+
+    cat = con_catalogo if con_catalogo is not None else conectar_catalogo(somente_leitura=True)
+    if not cat:
+        return {
+            "produto_id": produto_id,
+            "descricao": produto["descricao_canonica"],
+            "gtin": produto["gtin"],
+            "motivo": "catálogo offline não inicializado",
+            "novo": False,
+        }
+
+    descricao = produto["descricao_canonica"]
+    gtin_atual = produto["gtin"]
+
+    # Caso 1: O produto já possui GTIN (ex: veio do SPED cEAN ou de enriquecimento anterior)
+    if gtin_atual:
+        info = buscar_por_gtin(cat, gtin_atual)
+        if info:
+            aplicar(
+                con,
+                produto_id,
+                gtin_atual,
+                info.get("ncm"),
+                marca=info.get("marca"),
+                nutriscore=info.get("nutriscore"),
+                nova_group=info.get("nova_group"),
+                foto_url=info.get("foto_url"),
+            )
+            return {
+                "produto_id": produto_id,
+                "descricao": descricao,
+                "gtin": gtin_atual,
+                "novo": True,
+                "motivo": f"metadados enriquecidos via catálogo local ({info.get('origem')})",
+                "catalogo": info,
+            }
+        return {
+            "produto_id": produto_id,
+            "descricao": descricao,
+            "gtin": gtin_atual,
+            "novo": False,
+            "motivo": "já tinha GTIN mas não encontrado no catálogo local",
+        }
+
+    # Caso 2: O produto não possui GTIN - busca no catálogo por correspondência de descrição
+    termos = buscar_por_termo(cat, descricao, limite=5)
+    alvo = normalizar(descricao)
+    exatos = [t for t in termos if normalizar(t["nome"]) == alvo and digito_gtin_confere(t["gtin"])]
+
+    if len(exatos) == 1:
+        item_cat = exatos[0]
+        aplicar(
+            con,
+            produto_id,
+            item_cat["gtin"],
+            item_cat.get("ncm"),
+            marca=item_cat.get("marca"),
+            nutriscore=item_cat.get("nutriscore"),
+            nova_group=item_cat.get("nova_group"),
+            foto_url=item_cat.get("foto_url"),
+        )
+        log.info(
+            "produto %s (%s) -> gtin %s via catálogo local (%s)",
+            produto_id,
+            descricao,
+            item_cat["gtin"],
+            item_cat.get("origem"),
+        )
+        return {
+            "produto_id": produto_id,
+            "descricao": descricao,
+            "gtin": item_cat["gtin"],
+            "novo": True,
+            "motivo": f"resolvido via catálogo local ({item_cat.get('origem')})",
+            "catalogo": item_cat,
+        }
+
+    return {
+        "produto_id": produto_id,
+        "descricao": descricao,
+        "gtin": None,
+        "novo": False,
+        "motivo": "não encontrado no catálogo local"
+        if not exatos
+        else f"{len(exatos)} itens ambíguos no catálogo local",
+    }
+
+
+def enriquecer(
+    con: sqlite3.Connection,
+    cliente,
+    produto_id: int,
+    con_catalogo: sqlite3.Connection | None = None,
+) -> dict:
+    """Enriquecimento em cascata: catálogo local primeiro, Menor Preço depois."""
+    produto = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    if not produto:
+        raise ValueError("produto não encontrado")
+
+    if produto["is_granel"]:
+        return {
+            "produto_id": produto_id,
+            "descricao": produto["descricao_canonica"],
+            "gtin": None,
+            "motivo": "produto a granel não possui código de barras comercial",
+            "novo": False,
+        }
+
+    # Degrau 1: Catálogo Satélite Local (Offline, sem requisição de rede)
+    res_local = enriquecer_local(con, produto_id, con_catalogo)
+    if res_local["novo"]:
+        return res_local
+
+    if produto["gtin"]:
+        return {
+            "produto_id": produto_id,
+            "gtin": produto["gtin"],
+            "motivo": "já tinha código de barras",
+            "novo": False,
+        }
+
+    # Degrau 2: Menor Preço CELEPAR (sob demanda com teto horário)
     descricao = produto["descricao_canonica"]
     achados = cliente.buscar(termo=descricao)
     decisao = escolher_gtin(
-        descricao, achados,
+        descricao,
+        achados,
         lojas_da_casa=_lojas_onde_a_casa_comprou(con, produto_id),
-        precos_pagos=_preco_pago(con, produto_id))
+        precos_pagos=_preco_pago(con, produto_id),
+    )
 
     # Marca a tentativa dando certo ou não: é isso que impede quem não teve
     # consenso de voltar ao topo da fila toda rodada e queimar o teto de consultas.
     with con:
-        con.execute("UPDATE produto SET gtin_buscado_em = datetime('now','localtime')"
-                    " WHERE id = ?", (produto_id,))
+        con.execute(
+            "UPDATE produto SET gtin_buscado_em = datetime('now','localtime')"
+            " WHERE id = ?",
+            (produto_id,),
+        )
     if decisao["gtin"]:
         aplicar(con, produto_id, decisao["gtin"], decisao.get("ncm"))
-        log.info("produto %s (%s) -> gtin %s (%s)",
-                 produto_id, descricao, decisao["gtin"], decisao["motivo"])
-    return {"produto_id": produto_id, "descricao": descricao, "novo": bool(decisao["gtin"]),
-            **decisao}
+        # Se achou GTIN pelo Menor Preço, tenta enriquecer dados nutricionais do catálogo local
+        enriquecer_local(con, produto_id, con_catalogo)
+        log.info(
+            "produto %s (%s) -> gtin %s (%s)",
+            produto_id,
+            descricao,
+            decisao["gtin"],
+            decisao["motivo"],
+        )
+    return {
+        "produto_id": produto_id,
+        "descricao": descricao,
+        "novo": bool(decisao["gtin"]),
+        **decisao,
+    }
+
+
+def enriquecer_pendentes_local(
+    con: sqlite3.Connection,
+    con_catalogo: sqlite3.Connection | None = None,
+    limite: int = 100,
+) -> dict:
+    """Percorre os produtos pendentes e enriquece os possíveis usando o catálogo local."""
+    relatorio = {"identificados": [], "sem_certeza": []}
+    for pendente in pendentes(con, limite):
+        r = enriquecer_local(con, pendente["produto_id"], con_catalogo)
+        alvo = "identificados" if r["novo"] else "sem_certeza"
+        relatorio[alvo].append(
+            {"descricao": r["descricao"], "gtin": r.get("gtin"), "motivo": r["motivo"]}
+        )
+    relatorio["restantes"] = len(pendentes(con, 999))
+    return relatorio
 
 
 def pendentes(con: sqlite3.Connection, limite: int = 50) -> list[dict]:
@@ -132,9 +313,14 @@ def pendentes(con: sqlite3.Connection, limite: int = 50) -> list[dict]:
     nunca terão GTIN comercial, e perguntar à CELEPAR sobre eles seria queimar a cota.
     """
     return [
-        {"produto_id": r["id"], "descricao": r["descricao_canonica"], "compras": r["compras"],
-         "ja_perguntado": bool(r["gtin_buscado_em"])}
-        for r in con.execute("""
+        {
+            "produto_id": r["id"],
+            "descricao": r["descricao_canonica"],
+            "compras": r["compras"],
+            "ja_perguntado": bool(r["gtin_buscado_em"]),
+        }
+        for r in con.execute(
+            """
             SELECT p.id, p.descricao_canonica, p.gtin_buscado_em,
                    COUNT(DISTINCT i.chave) AS compras
               FROM produto p JOIN item i ON i.produto_id = p.id
@@ -142,6 +328,8 @@ def pendentes(con: sqlite3.Connection, limite: int = 50) -> list[dict]:
              GROUP BY p.id
              ORDER BY (p.gtin_buscado_em IS NOT NULL), p.gtin_buscado_em,
                       compras DESC, p.descricao_canonica
-             LIMIT ?""", (limite,))
+             LIMIT ?""",
+            (limite,),
+        )
     ]
 

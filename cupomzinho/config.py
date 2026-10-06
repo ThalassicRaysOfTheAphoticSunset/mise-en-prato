@@ -53,6 +53,10 @@ class Config(BaseSettings):
         return self.dados / "cupomzinho.db"
 
     @property
+    def banco_catalogo(self) -> Path:
+        return self.dados / "catalogo.db"
+
+    @property
     def pasta_cupons(self) -> Path:
         """O HTML cru de cada cupom, para reprocessar sem rebaixar a SEFAZ."""
         return self.dados / "cupons"

@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (
+    catalogo,
     cupons,
     enriquecimento,
     listas,
@@ -763,6 +764,24 @@ def pesquisar_precos(lista_id: int, request: Request):
 
 
 # ── descobrir código de barras ───────────────────────────────────────────────
+@app.get("/api/catalogo/status")
+def status_catalogo(_: Morador):
+    """Estatísticas do catálogo satélite offline (dados/catalogo.db)."""
+    con_cat = catalogo.conectar_catalogo(somente_leitura=True)
+    if not con_cat:
+        return responder({"disponivel": False, "mensagem": "Catálogo offline não inicializado."})
+    stats = catalogo.estatisticas_catalogo(con_cat)
+    con_cat.close()
+    return responder({"disponivel": True, **stats})
+
+
+@app.post("/api/enriquecer/local")
+def enriquecer_local_produtos(_: Morador, con: Banco, quantos: int = 100):
+    """Enriquece produtos pendentes usando o catálogo satélite offline."""
+    relatorio = enriquecimento.enriquecer_pendentes_local(con, limite=quantos)
+    return responder(relatorio)
+
+
 @app.get("/api/enriquecer")
 async def ver_pendentes(_: Morador, con: Banco):
     return responder({"pendentes": enriquecimento.pendentes(con)})
