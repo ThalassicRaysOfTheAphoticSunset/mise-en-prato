@@ -1,7 +1,7 @@
 /* Service worker mínimo: guarda só o esqueleto da PWA para ela abrir instalada
    e sem rede. Dado NUNCA é cacheado — gasto velho na tela é pior que tela
    vazia, e o banco é a única verdade. */
-const CACHE = 'cupomzinho-v2';   // v2: a gaveta da chave de acesso entrou no esqueleto
+const CACHE = 'cupomzinho-v3';   // v3: aba de revisão, visualizador de fotos de falha e envio de HTML
 const ESQUELETO = ['/', '/estilo.css', '/app.js', '/icone.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (ev) => {

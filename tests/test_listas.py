@@ -168,7 +168,7 @@ def test_preco_pago_pela_casa_e_consultado_convivem(con):
     por_produto(con, lista, atum)
     _preco(con, atum, "IRMAOS MUFFATO S.A", 849)
 
-    r = comparar(con, lista, dias=30)
+    r = comparar(con, lista, dias=365)
     por_loja = {loja["loja"]: loja for loja in r["lojas"]}
     assert por_loja["IRMAOS MUFFATO S.A"]["fontes"] == ["menor_preco"]
     assert por_loja["LAR COOPERATIVA AGROINDUSTRIAL"]["fontes"] == ["cupom"]

@@ -324,3 +324,24 @@ def test_listar_falhas_e_servir_foto(cliente, tmp_path):
 
     r_invalido = cliente.get("/api/falha/.._etc_passwd")
     assert r_invalido.status_code in (400, 404)
+
+
+def test_enviar_html_cupom(cliente):
+    html = FIXTURE.read_text(encoding="utf-8")
+    r = cliente.post(
+        "/api/cupom/html",
+        files={"arquivo": ("nota.html", html.encode("utf-8"), "text/html")},
+    )
+    assert r.status_code == 200
+    dados = r.json()
+    assert dados["cupom"]["loja"] == "LAR COOPERATIVA AGROINDUSTRIAL"
+    assert len(dados["cupom"]["itens"]) > 0
+
+
+def test_enviar_html_invalido(cliente):
+    r = cliente.post(
+        "/api/cupom/html",
+        files={"arquivo": ("nota.html", b"<html><body>nada aqui</body></html>", "text/html")},
+    )
+    assert r.status_code == 400
+

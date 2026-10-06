@@ -113,6 +113,18 @@ $('#foto').onchange = (ev) => {
   ev.target.value = '';
 };
 
+const inputHtml = $('#input-html');
+if (inputHtml) {
+  inputHtml.onchange = (ev) => {
+    const arquivo = ev.target.files[0];
+    if (!arquivo) return;
+    const corpo = new FormData();
+    corpo.append('arquivo', arquivo);
+    enviar(api('/api/cupom/html', { method: 'POST', body: corpo }), 'Lendo o arquivo HTML da SEFAZ…');
+    ev.target.value = '';
+  };
+}
+
 $('#form-link').onsubmit = (ev) => {
   ev.preventDefault();
   const url = $('#link').value.trim();
@@ -558,6 +570,10 @@ window.abrirFotoDestaque = (arquivo, titulo, chave) => {
         <button type="button" class="acao" onclick="preencherChave('${chave}')">
           ⚡ Consultar pela chave
         </button>
+        <label class="acao" style="cursor:pointer;display:inline-flex;align-items:center;gap:.3rem;margin:0">
+          📄 Enviar HTML
+          <input type="file" accept=".html,.htm" hidden onchange="enviarHtmlCupom(this)">
+        </label>
         <button type="button" class="acao" onclick="preencherManual('${chave}')">
           ✍ Registrar total
         </button>
@@ -613,6 +629,15 @@ window.preencherManual = (chave, emitidoEm) => {
   $('#manual-total').scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
 
+window.enviarHtmlCupom = (input) => {
+  const arquivo = input.files?.[0];
+  if (!arquivo) return;
+  const corpo = new FormData();
+  corpo.append('arquivo', arquivo);
+  enviar(api('/api/cupom/html', { method: 'POST', body: corpo }), 'Lendo o arquivo HTML da SEFAZ…');
+  input.value = '';
+};
+
 carregadores.revisao = async () => {
   const [{ revisao }, { falhas }] = await Promise.all([
     api('/api/cupons'),
@@ -651,6 +676,10 @@ carregadores.revisao = async () => {
             <button type="button" class="acao" onclick="preencherChave('${c.chave}')">
               ⚡ Consultar pela chave
             </button>
+            <label class="acao" style="cursor:pointer;display:inline-flex;align-items:center;gap:.3rem;margin:0">
+              📄 Enviar HTML
+              <input type="file" accept=".html,.htm" hidden onchange="enviarHtmlCupom(this)">
+            </label>
             <button type="button" class="acao" onclick="preencherManual('${c.chave}', '${c.emitido_em || ''}')">
               ✍ Total manual
             </button>

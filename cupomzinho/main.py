@@ -192,8 +192,8 @@ def _gravar(con, chave: str, cupom, quem: str, origem: str, url_qr: str = "") ->
         cupom.avisos.append(
             f"a chave da página ({cupom.chave}) difere da chave informada ({chave})")
         cupom.chave = chave
-    cupons.gravar(con, cupom, morador=quem, origem=origem, url_qr=url_qr)
-    return {"novo": True, "cupom": cupons.ler(con, chave)}
+    era_novo = cupons.gravar(con, cupom, morador=quem, origem=origem, url_qr=url_qr)
+    return {"novo": era_novo, "cupom": cupons.ler(con, chave)}
 
 
 def _ja_guardado(con, chave: str) -> dict | None:
@@ -278,6 +278,34 @@ async def enviar_foto(quem: Morador, con: Banco, foto: Annotated[UploadFile, Fil
     raise HTTPException(
         422, "não achei nenhum QR Code nessa foto. A foto ficou guardada no "
              "servidor para eu descobrir por quê — tente também colar o link.")
+
+
+@app.post("/api/cupom/html")
+async def enviar_html(quem: Morador, con: Banco, arquivo: Annotated[UploadFile, File()]):
+    """Recebe o arquivo HTML da NFC-e salvo direto do portal da SEFAZ."""
+    bruto = await arquivo.read()
+    try:
+        html = bruto.decode("utf-8")
+    except UnicodeDecodeError:
+        html = bruto.decode("iso-8859-1", errors="replace")
+
+    try:
+        cupom = interpretar(html)
+    except Exception as erro:
+        raise HTTPException(400, f"não consegui ler o cupom desse HTML: {erro}") from erro
+
+    if not cupom.chave or len(cupom.chave) != 44:
+        match = re.search(r"\b(?:\d[\s\xa0]*){44}\b", html)
+        if match:
+            chave_candidata = re.sub(r"\D", "", match.group(0))
+            if len(chave_candidata) == 44:
+                cupom.chave = chave_candidata
+
+    if not cupom.chave or len(cupom.chave) != 44 or not cupom.chave.isdigit():
+        raise HTTPException(400, "não encontrei uma chave de acesso de 44 dígitos no HTML")
+
+    _guardar_html(cupom.chave, html)
+    return responder(_gravar(con, cupom.chave, cupom, quem, "html"))
 
 
 # ── entrar pela chave, quando o QR está perdido ──────────────────────────────
