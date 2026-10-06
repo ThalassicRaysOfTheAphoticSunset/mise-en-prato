@@ -144,16 +144,57 @@ def test_enriquecer_dois_produtos_no_mesmo_gtin_vira_candidato_a_unificacao(con)
 
 
 def test_quem_ja_foi_perguntado_vai_para_o_fim_da_fila(con):
-    """A cebola a granel nunca terá código — perguntar de novo queima a cota."""
-    cebola = con.execute(
-        "SELECT id FROM produto WHERE descricao_canonica = 'CEBOLA NACIONAL KG'").fetchone()[0]
-    assert pendentes(con)[0]["produto_id"] != cebola or True   # posição inicial não importa
+    """Produto industrial que falhou vai para o fim da fila para não queimar cota."""
+    alvo = con.execute(
+        "SELECT id FROM produto WHERE descricao_canonica LIKE 'CHOC HERSHEYS%'").fetchone()[0]
+    assert pendentes(con)[0]["produto_id"] != alvo or True
 
-    enriquecer(con, ClienteFalso([]), cebola)                  # tentativa sem sucesso
+    enriquecer(con, ClienteFalso([]), alvo)                    # tentativa sem sucesso
     fila = pendentes(con)
-    assert fila[-1]["produto_id"] == cebola
+    assert fila[-1]["produto_id"] == alvo
     assert fila[-1]["ja_perguntado"] is True
     assert all(p["ja_perguntado"] is False for p in fila[:-1])
+
+
+def test_produto_a_granel_identificado_na_ingestao(con):
+    """Produtos por peso (KG) são reconhecidos como is_granel=1 na ingestão."""
+    cebola = con.execute(
+        "SELECT is_granel FROM produto WHERE descricao_canonica = 'CEBOLA NACIONAL KG'"
+    ).fetchone()[0]
+    assert cebola == 1
+
+    pepino = con.execute(
+        "SELECT is_granel FROM produto WHERE descricao_canonica = 'PEPINO JAPONES KG'"
+    ).fetchone()[0]
+    assert pepino == 1
+
+    atum = con.execute(
+        "SELECT is_granel FROM produto WHERE descricao_canonica = ?", (ATUM,)
+    ).fetchone()[0]
+    assert atum == 0
+
+
+def test_produto_a_granel_nao_entra_na_fila_de_pendentes(con):
+    """Cebola, batata e itens a granel nunca têm GTIN comercial — nem devem entrar na fila."""
+    fila = pendentes(con)
+    descricoes = {p["descricao"] for p in fila}
+    assert "CEBOLA NACIONAL KG" not in descricoes
+    assert "PEPINO JAPONES KG" not in descricoes
+    assert "BATATA ESPECIAL KG" not in descricoes
+    assert "REPOLHO ROXO KG" not in descricoes
+    assert "TOMATE EXTRA KG" not in descricoes
+
+
+def test_enriquecer_produto_a_granel_nao_gasta_consulta(con):
+    """Se alguém pedir para enriquecer produto a granel, recusa sem bater na API."""
+    cebola = con.execute(
+        "SELECT id FROM produto WHERE descricao_canonica = 'CEBOLA NACIONAL KG'"
+    ).fetchone()[0]
+    cliente = ClienteFalso([])
+    r = enriquecer(con, cliente, cebola)
+    assert r["novo"] is False
+    assert cliente.consultas == []
+    assert "granel" in r["motivo"]
 
 
 def test_tentativa_e_marcada_mesmo_dando_certo(con):
@@ -164,3 +205,4 @@ def test_tentativa_e_marcada_mesmo_dando_certo(con):
     marcado = con.execute(
         "SELECT gtin_buscado_em FROM produto WHERE id = ?", (produto_id,)).fetchone()[0]
     assert marcado
+

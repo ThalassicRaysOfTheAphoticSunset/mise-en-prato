@@ -6,12 +6,43 @@ e quem já está gravado volta como está. É de propósito — a mesma foto man
 duas vezes é o caso comum, não a exceção.
 """
 import json
+import re
 import sqlite3
 from datetime import datetime
 from decimal import Decimal
 
 from .banco import centavos, milesimos, reais, unidades
 from .nfce_pr import Cupom, normalizar
+
+
+def eh_granel(descricao: str, unidade: str = "", quantidade: Decimal | None = None,
+              codigo_loja: str = "") -> bool:
+    """Reconhece se o produto é vendido a granel / pesado na balança.
+
+    Produtos a granel nunca têm código de barras comercial (GTIN/EAN).
+    Sinais confiáveis:
+      - unidade de peso no cupom: KG, GR, G, QUILO, KG., KGS
+      - menção explícita a KG ou GRANEL na descrição (ex: 'CEBOLA NACIONAL KG')
+      - código interno de balança da loja (iniciado com dígito 2 e tamanho EAN 12/13)
+      - quantidade fracionária com unidade não-unitária
+    """
+    u = (unidade or "").strip().upper()
+    if u in ("KG", "GR", "G", "QUILO", "KG.", "KGS"):
+        return True
+
+    desc = normalizar(descricao)
+    if re.search(r"\b(KG|QUILO|A GRANEL|GRANEL|PESO)\b", desc):
+        return True
+
+    cod = re.sub(r"\D", "", codigo_loja or "")
+    if len(cod) in (12, 13) and cod.startswith("2"):
+        return True
+
+    if quantidade is not None and (quantidade % 1 != 0):
+        if u not in ("UN", "PC", "CX", "PCT", "PT", "FR", "L", "LT", "ML"):
+            return True
+
+    return False
 
 
 def existe(con: sqlite3.Connection, chave: str) -> bool:
@@ -28,7 +59,9 @@ def _garantir_estabelecimento(con: sqlite3.Connection, e) -> None:
     )
 
 
-def _produto_de(con: sqlite3.Connection, cnpj: str, descricao: str) -> int:
+def _produto_de(con: sqlite3.Connection, cnpj: str, descricao: str, *,
+                unidade: str = "", quantidade: Decimal | None = None,
+                codigo_loja: str = "") -> int:
     """Descrição impressa pela loja -> id de produto. Os dois primeiros degraus.
 
     1. `apelido_loja`: se (loja, texto) já foi resolvido, acabou — é o que faz o
@@ -41,18 +74,30 @@ def _produto_de(con: sqlite3.Connection, cnpj: str, descricao: str) -> int:
     verdade; até lá o produto existe e já acumula o SEU histórico de preço.
     """
     norm = normalizar(descricao)
+    granel = 1 if eh_granel(descricao, unidade, quantidade, codigo_loja) else 0
+
     achado = con.execute(
         "SELECT produto_id FROM apelido_loja WHERE cnpj = ? AND descricao_norm = ?", (cnpj, norm)
     ).fetchone()
     if achado:
-        return achado["produto_id"]
+        produto_id = achado["produto_id"]
+        if granel:
+            con.execute(
+                "UPDATE produto SET is_granel = 1 WHERE id = ? AND is_granel = 0", (produto_id,)
+            )
+        return produto_id
 
     achado = con.execute(
-        "SELECT id FROM produto WHERE descricao_canonica = ?", (norm,)
+        "SELECT id, is_granel FROM produto WHERE descricao_canonica = ?", (norm,)
     ).fetchone()
-    produto_id = achado["id"] if achado else con.execute(
-        "INSERT INTO produto (descricao_canonica) VALUES (?)", (norm,)
-    ).lastrowid
+    if achado:
+        produto_id = achado["id"]
+        if granel and not achado["is_granel"]:
+            con.execute("UPDATE produto SET is_granel = 1 WHERE id = ?", (produto_id,))
+    else:
+        produto_id = con.execute(
+            "INSERT INTO produto (descricao_canonica, is_granel) VALUES (?, ?)", (norm, granel)
+        ).lastrowid
 
     con.execute(
         "INSERT OR IGNORE INTO apelido_loja (cnpj, descricao_norm, produto_id) VALUES (?, ?, ?)",
@@ -119,7 +164,10 @@ def gravar(con: sqlite3.Connection, cupom: Cupom, *, morador: str,
                  url_qr, cupom.chave),
             )
             for item in cupom.itens:
-                produto_id = _produto_de(con, cupom.estabelecimento.cnpj, item.descricao)
+                produto_id = _produto_de(
+                    con, cupom.estabelecimento.cnpj, item.descricao,
+                    unidade=item.unidade, quantidade=item.quantidade, codigo_loja=item.codigo_loja,
+                )
                 con.execute(
                     """INSERT INTO item (chave, seq, descricao, codigo_loja, unidade,
                                          quantidade_milesimos, unitario_centavos, total_centavos,
@@ -156,7 +204,10 @@ def gravar(con: sqlite3.Connection, cupom: Cupom, *, morador: str,
              url_qr, datetime.now().isoformat(sep=" ", timespec="seconds")),
         )
         for item in cupom.itens:
-            produto_id = _produto_de(con, cupom.estabelecimento.cnpj, item.descricao)
+            produto_id = _produto_de(
+                con, cupom.estabelecimento.cnpj, item.descricao,
+                unidade=item.unidade, quantidade=item.quantidade, codigo_loja=item.codigo_loja,
+            )
             con.execute(
                 """INSERT INTO item (chave, seq, descricao, codigo_loja, unidade,
                                      quantidade_milesimos, unitario_centavos, total_centavos,

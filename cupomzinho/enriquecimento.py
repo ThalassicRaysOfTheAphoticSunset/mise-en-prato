@@ -99,6 +99,11 @@ def enriquecer(con: sqlite3.Connection, cliente, produto_id: int) -> dict:
     if produto["gtin"]:
         return {"produto_id": produto_id, "gtin": produto["gtin"],
                 "motivo": "já tinha código de barras", "novo": False}
+    if produto["is_granel"]:
+        return {"produto_id": produto_id, "descricao": produto["descricao_canonica"],
+                "gtin": None,
+                "motivo": "produto a granel não possui código de barras comercial",
+                "novo": False}
 
     descricao = produto["descricao_canonica"]
     achados = cliente.buscar(termo=descricao)
@@ -107,8 +112,8 @@ def enriquecer(con: sqlite3.Connection, cliente, produto_id: int) -> dict:
         lojas_da_casa=_lojas_onde_a_casa_comprou(con, produto_id),
         precos_pagos=_preco_pago(con, produto_id))
 
-    # Marca a tentativa dando certo ou não: é isso que impede a cebola de
-    # voltar ao topo da fila toda rodada e queimar o teto de consultas.
+    # Marca a tentativa dando certo ou não: é isso que impede quem não teve
+    # consenso de voltar ao topo da fila toda rodada e queimar o teto de consultas.
     with con:
         con.execute("UPDATE produto SET gtin_buscado_em = datetime('now','localtime')"
                     " WHERE id = ?", (produto_id,))
@@ -123,9 +128,8 @@ def enriquecer(con: sqlite3.Connection, cliente, produto_id: int) -> dict:
 def pendentes(con: sqlite3.Connection, limite: int = 50) -> list[dict]:
     """Produtos sem código de barras. Quem nunca foi perguntado vem primeiro.
 
-    A ordem importa porque cada produto custa uma consulta do teto por hora:
-    perguntar de novo sobre a cebola a granel, que nunca terá código, é gastar
-    a cota com uma resposta já conhecida.
+    Produtos a granel (is_granel = 1) nunca são incluídos: cebola e carnes a peso
+    nunca terão GTIN comercial, e perguntar à CELEPAR sobre eles seria queimar a cota.
     """
     return [
         {"produto_id": r["id"], "descricao": r["descricao_canonica"], "compras": r["compras"],
@@ -134,9 +138,10 @@ def pendentes(con: sqlite3.Connection, limite: int = 50) -> list[dict]:
             SELECT p.id, p.descricao_canonica, p.gtin_buscado_em,
                    COUNT(DISTINCT i.chave) AS compras
               FROM produto p JOIN item i ON i.produto_id = p.id
-             WHERE p.gtin IS NULL
+             WHERE p.gtin IS NULL AND p.is_granel = 0
              GROUP BY p.id
              ORDER BY (p.gtin_buscado_em IS NOT NULL), p.gtin_buscado_em,
                       compras DESC, p.descricao_canonica
              LIMIT ?""", (limite,))
     ]
+
