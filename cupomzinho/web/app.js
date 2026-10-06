@@ -120,10 +120,56 @@ document.querySelectorAll('#abas button').forEach((botao) => {
 
 /* ── enviar ───────────────────────────────────────────────────────────────── */
 function cartaoCupom(c, selo) {
-  const itens = c.itens.map((i) => `
-    <tr><td>${i.descricao}<div class="fraca">${quantia(i.quantidade)} ${i.unidade || ''} ×
-        ${dinheiro(i.valor_unitario)}</div></td>
-        <td class="num">${dinheiro(i.valor_total)}</td></tr>`).join('');
+  window._itensCupomAtual = c.itens;
+
+  const itens = c.itens.map((i) => {
+    let htmlVariante = '';
+    if (i.sabor_adicional) {
+      htmlVariante = `
+        <div style="display:flex;align-items:center;gap:.4rem;margin-top:.25rem;flex-wrap:wrap">
+          <span class="badge-sabor" title="${i.gtin_variante || ''}">🏷️ ${i.sabor_adicional}</span>
+          <button type="button" class="btn-link" style="font-size:.74rem;color:var(--fraca);background:none;border:none;cursor:pointer;padding:0"
+                  onclick="abrirModalAssociarSabor(${i.id}, '${c.chave}')">alterar</button>
+        </div>`;
+    } else if (i.variantes && i.variantes.length) {
+      const comSabor = i.variantes.filter((v) => v.sabor);
+      if (comSabor.length > 0) {
+        htmlVariante = `
+          <div class="chips-sabores-container">
+            <span class="fraca" style="font-size:.76rem">Sabor:</span>
+            ${comSabor.map((v) => `
+              <button type="button" class="chip-sabor"
+                      onclick="escolherSaborItem(${i.id}, '${v.gtin}', '${(v.sabor || '').replace(/'/g, "\\'")}', '${c.chave}')">${v.sabor}</button>
+            `).join('')}
+            <button type="button" class="chip-sabor outro"
+                    onclick="abrirModalAssociarSabor(${i.id}, '${c.chave}')">+ Outro / Bipar</button>
+          </div>`;
+      } else {
+        htmlVariante = `
+          <div style="margin-top:.25rem">
+            <button type="button" class="btn-escolher-sabor"
+                    onclick="abrirModalAssociarSabor(${i.id}, '${c.chave}')">+ Escolher Sabor / EAN</button>
+          </div>`;
+      }
+    } else {
+      htmlVariante = `
+        <div style="margin-top:.25rem">
+          <button type="button" class="btn-escolher-sabor"
+                  onclick="abrirModalAssociarSabor(${i.id}, '${c.chave}')">+ Escolher Sabor / EAN</button>
+        </div>`;
+    }
+
+    return `
+      <tr>
+        <td>
+          <div>${i.descricao}</div>
+          <div class="fraca">${quantia(i.quantidade)} ${i.unidade || ''} × ${dinheiro(i.valor_unitario)}</div>
+          ${htmlVariante}
+        </td>
+        <td class="num" style="vertical-align:top">${dinheiro(i.valor_total)}</td>
+      </tr>`;
+  }).join('');
+
   return `
     <div class="cartao" style="margin-top:.9rem">
       <div class="linha"><strong>${c.loja}</strong>
@@ -157,6 +203,181 @@ window.verCupom = async (chave) => {
   const c = await api('/api/cupom/' + chave);
   $('#cupom-lido').innerHTML = cartaoCupom(c, dia(c.emitido_em));
   $('#cupom-lido').scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+window.escolherSaborItem = async (itemId, gtin, sabor, chave) => {
+  try {
+    aviso('Associando sabor…');
+    await api(`/api/item/${itemId}/variante`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ gtin, sabor, lembrar_loja: true, retroagir: false }),
+    });
+    aviso(`Sabor "${sabor}" associado!`);
+    await verCupom(chave);
+  } catch (erro) {
+    aviso(erro.message, true);
+  }
+};
+
+window.buscarInfoGtin = async (gtin) => {
+  const cod = (gtin || '').trim();
+  if (!cod || cod.length < 8) return;
+  try {
+    const meta = await api('/api/catalogo/ean/' + cod);
+    if (meta) {
+      const inputSabor = document.getElementById('modal-input-sabor');
+      if (inputSabor && !inputSabor.value.trim() && meta.sabor) {
+        inputSabor.value = meta.sabor;
+      }
+      const elPrevia = document.getElementById('modal-previa-ean');
+      if (elPrevia) {
+        elPrevia.innerHTML = `<span class="badge-sabor" style="margin-top:.3rem;display:inline-block">📦 ${meta.nome || ''}${meta.sabor ? ' · ' + meta.sabor : ''}</span>`;
+      }
+    }
+  } catch (e) {
+    // catálogo não possui ou offline
+  }
+};
+
+window.preencherVarianteModal = (gtin, sabor) => {
+  const inGtin = document.getElementById('modal-input-gtin');
+  const inSabor = document.getElementById('modal-input-sabor');
+  if (inGtin && gtin) inGtin.value = gtin;
+  if (inSabor && sabor) inSabor.value = sabor;
+};
+
+window.abrirModalAssociarSabor = (itemId, chave) => {
+  const antigo = document.getElementById('modal-associar-sabor');
+  if (antigo) antigo.remove();
+
+  const item = (window._itensCupomAtual || []).find((x) => x.id === itemId) || {};
+  const descricao = item.descricao || 'Item do Cupom';
+  const saborAtual = item.sabor_adicional || '';
+  const gtinAtual = item.gtin_variante || '';
+  const variantes = (item.variantes || []).filter((v) => v.sabor);
+
+  const modal = document.createElement('div');
+  modal.id = 'modal-associar-sabor';
+  modal.className = 'modal-fundo';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+  const chipsConhecidos = variantes.length ? `
+    <div style="margin-bottom:.8rem">
+      <span class="fraca" style="font-size:.8rem;font-weight:600;display:block;margin-bottom:.3rem">Sabores conhecidos desta linha:</span>
+      <div style="display:flex;gap:.35rem;flex-wrap:wrap">
+        ${variantes.map((v) => `
+          <button type="button" class="chip-sabor" onclick="preencherVarianteModal('${v.gtin}', '${(v.sabor || '').replace(/'/g, "\\'")}')">
+            ${v.sabor}
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  ` : '';
+
+  modal.innerHTML = `
+    <div class="modal-gaveta" onclick="event.stopPropagation()">
+      <div class="linha" style="margin-bottom:.8rem">
+        <strong>Identificar Sabor / EAN</strong>
+        <span class="clicavel fraca" style="font-size:1.2rem;padding:.2rem" onclick="document.getElementById('modal-associar-sabor').remove()">✕</span>
+      </div>
+      <div class="fraca" style="font-size:.84rem;margin-bottom:.7rem;line-height:1.3">${descricao}</div>
+
+      ${chipsConhecidos}
+
+      <div style="margin-bottom:.6rem">
+        <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:.25rem">Código de Barras (EAN / GTIN):</label>
+        <div style="display:flex;gap:.4rem">
+          <input type="text" id="modal-input-gtin" inputmode="numeric" placeholder="789... (8 a 14 dígitos)" value="${gtinAtual}" style="flex:1" autofocus
+                 onchange="buscarInfoGtin(this.value)">
+          <label class="acao clicavel" style="padding:.4rem .7rem;font-size:.84rem;cursor:pointer;display:inline-flex;align-items:center;margin:0" title="Escanear com a câmera">
+            📷 Bipar
+            <input type="file" accept="image/*" capture="environment" hidden onchange="lerCodigoBarrasArquivo(this, 'modal-input-gtin')">
+          </label>
+        </div>
+        <div id="modal-previa-ean" style="font-size:.78rem"></div>
+      </div>
+
+      <div style="margin-bottom:.7rem">
+        <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:.25rem">Nome do Sabor / Variante:</label>
+        <input type="text" id="modal-input-sabor" placeholder="Ex: Chocolatto, Classic, Morango..." value="${saborAtual}">
+        <div class="fraca" style="font-size:.76rem;margin-top:.2rem">Preencha o sabor ou digite o GTIN da embalagem para obter automaticamente do Open Food Facts.</div>
+      </div>
+
+      <div style="margin-bottom:.8rem;font-size:.84rem">
+        <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;margin-bottom:.3rem">
+          <input type="checkbox" id="modal-chk-lembrar" checked>
+          <span>Lembrar para o código desta loja nas próximas compras</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer">
+          <input type="checkbox" id="modal-chk-retroagir">
+          <span>Aplicar também às compras anteriores deste produto nesta loja</span>
+        </label>
+      </div>
+
+      <div style="display:flex;gap:.5rem">
+        <button type="button" class="acao" style="flex:1" onclick="confirmarAssociarSabor(${itemId}, '${chave}')">Salvar</button>
+        <button type="button" class="btn-secundario" onclick="document.getElementById('modal-associar-sabor').remove()">Cancelar</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+};
+
+window.lerCodigoBarrasArquivo = async (input, targetInputId) => {
+  const arq = input.files?.[0];
+  if (!arq) return;
+  aviso('Lendo código de barras da foto…');
+  try {
+    if ('BarcodeDetector' in window) {
+      const detector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'] });
+      const img = await createImageBitmap(arq);
+      const barcodes = await detector.detect(img);
+      if (barcodes.length > 0) {
+        const cod = barcodes[0].rawValue;
+        const target = document.getElementById(targetInputId);
+        if (target) target.value = cod;
+        aviso(`Código lido: ${cod}`);
+        await buscarInfoGtin(cod);
+        return;
+      }
+    }
+  } catch (e) {
+    // fallback
+  }
+  aviso('Foto capturada. Digite os números da embalagem caso não detecte automaticamente.', false);
+};
+
+window.confirmarAssociarSabor = async (itemId, chave) => {
+  const gtin = (document.getElementById('modal-input-gtin')?.value || '').trim();
+  const sabor = (document.getElementById('modal-input-sabor')?.value || '').trim();
+  const lembrar = document.getElementById('modal-chk-lembrar')?.checked ?? true;
+  const retroagir = document.getElementById('modal-chk-retroagir')?.checked ?? false;
+
+  if (!gtin && !sabor) {
+    aviso('Preencha ao menos o código GTIN ou o sabor.', true);
+    return;
+  }
+
+  try {
+    aviso('Salvando variante…');
+    await api(`/api/item/${itemId}/variante`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        gtin: gtin || undefined,
+        sabor: sabor || undefined,
+        lembrar_loja: lembrar,
+        retroagir: retroagir,
+      }),
+    });
+    document.getElementById('modal-associar-sabor')?.remove();
+    aviso('Variante associada com sucesso!');
+    await verCupom(chave);
+  } catch (erro) {
+    aviso(erro.message, true);
+  }
 };
 
 async function enviar(promessa, textoOcupado) {
@@ -885,9 +1106,14 @@ function ativarInteracaoGraficoHistorico(p) {
 
 window.verProduto = async (id) => {
   const p = await api('/api/produto/' + id);
-  const compras = p.compras.map((c) => `
-    <tr><td>${dia(c.data)}<div class="fraca">${c.loja}</div></td>
-        <td class="num">${dinheiro(c.valor_unitario)}<div class="fraca">${quantia(c.quantidade)} ${c.unidade || ''}</div></td></tr>`).join('');
+  window._produtoAtualCompras = p.compras || [];
+  const compras = p.compras.map((c) => {
+    const saborBadge = c.sabor_adicional ? `<span class="badge-sabor" style="margin-left:.3rem;font-size:.72rem">🏷️ ${c.sabor_adicional}</span>` : '';
+    const codLojaInfo = c.codigo_loja ? `<span class="fraca" style="margin-left:.4rem;font-size:.75rem">PLU: ${c.codigo_loja}</span>` : '';
+    return `
+      <tr><td>${dia(c.data)}${saborBadge}<div class="fraca">${c.loja}${codLojaInfo}</div></td>
+          <td class="num">${dinheiro(c.valor_unitario)}<div class="fraca">${quantia(c.quantidade)} ${c.unidade || ''}</div></td></tr>`;
+  }).join('');
   const graficoHtml = renderizarGraficoHistorico(p);
   $('#produto-detalhe').innerHTML = `
     <div class="cartao" style="margin-top:.9rem">
@@ -934,6 +1160,7 @@ window.verProduto = async (id) => {
               </div>
               <div class="variante-acoes">
                 ${!v.eh_padrao ? `<button class="btn-secundario" style="padding:.2rem .5rem;font-size:.78rem" onclick="definirVariantePadrao(${p.id}, '${v.gtin}')">★ Tornar padrão</button>` : '<span></span>'}
+                <button class="btn-secundario" style="padding:.2rem .5rem;font-size:.78rem;color:var(--destaque,#3b82f6)" onclick="abrirModalDesmembrar(${p.id}, '${v.gtin}', '${(v.sabor || v.nome || '').replace(/'/g, "\\'")}')" title="Separar em produto autônomo">Separar Produto</button>
                 <button class="btn-secundario" style="padding:.2rem .5rem;font-size:.78rem;color:var(--alerta)" onclick="removerVariante(${p.id}, '${v.gtin}')" title="Desvincular sabor">Remover</button>
               </div>
             </div>
@@ -1086,6 +1313,81 @@ window.removerVariante = async (produtoId, gtin) => {
     carregadores.produtos();
   } catch (err) {
     alert(err.message);
+  }
+};
+
+window.abrirModalDesmembrar = (produtoId, gtin, saborNome) => {
+  const antigo = document.getElementById('modal-desmembrar');
+  if (antigo) antigo.remove();
+
+  let codLojaSugerido = '';
+  const compras = window._produtoAtualCompras || [];
+  const compraCasada = compras.find((c) => c.gtin_variante === gtin || (saborNome && c.sabor_adicional === saborNome));
+  if (compraCasada && compraCasada.codigo_loja) {
+    codLojaSugerido = compraCasada.codigo_loja;
+  }
+
+  const modal = document.createElement('div');
+  modal.id = 'modal-desmembrar';
+  modal.className = 'modal-fundo';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+  modal.innerHTML = `
+    <div class="modal-gaveta" onclick="event.stopPropagation()">
+      <div class="linha" style="margin-bottom:.8rem">
+        <strong>Separar Produto no Catálogo</strong>
+        <span class="clicavel fraca" style="font-size:1.2rem;padding:.2rem" onclick="document.getElementById('modal-desmembrar').remove()">✕</span>
+      </div>
+      <div class="fraca" style="font-size:.84rem;margin-bottom:.8rem;line-height:1.4">
+        Esta ação desmembra a variante (EAN <code>${gtin}</code>) em um produto próprio e autônomo no catálogo.
+        Útil quando a loja agrupou produtos diferentes sob o mesmo nome fiscal (ex: Iogurte Tradicional vs Grego).
+      </div>
+
+      <div style="margin-bottom:.8rem">
+        <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:.25rem">Nome do Novo Produto:</label>
+        <input type="text" id="modal-desmembrar-nome" value="${saborNome}" required autofocus>
+      </div>
+
+      <div style="margin-bottom:.8rem">
+        <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:.25rem">Código Interno da Loja a Migrar (opcional):</label>
+        <input type="text" id="modal-desmembrar-codloja" value="${codLojaSugerido}" placeholder="Ex: 314121 (PLU da loja)">
+      </div>
+
+      <div style="display:flex;gap:.5rem">
+        <button type="button" class="acao" style="flex:1" onclick="confirmarDesmembrar(${produtoId}, '${gtin}')">Confirmar Separação</button>
+        <button type="button" class="btn-secundario" onclick="document.getElementById('modal-desmembrar').remove()">Cancelar</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+};
+
+window.confirmarDesmembrar = async (produtoId, gtin) => {
+  const novoNome = (document.getElementById('modal-desmembrar-nome')?.value || '').trim();
+  const codigoLoja = (document.getElementById('modal-desmembrar-codloja')?.value || '').trim();
+
+  try {
+    aviso('Desmembrando produto…');
+    const resp = await api(`/api/produto/${produtoId}/desmembrar`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        gtin: gtin,
+        novo_nome: novoNome || undefined,
+        codigo_loja: codigoLoja || undefined,
+      }),
+    });
+    document.getElementById('modal-desmembrar')?.remove();
+    aviso('Produto desmembrado com sucesso!');
+    carregadores.produtos();
+    if (resp.novo_produto_id) {
+      await verProduto(resp.novo_produto_id);
+    } else {
+      await verProduto(produtoId);
+    }
+  } catch (erro) {
+    aviso(erro.message, true);
   }
 };
 

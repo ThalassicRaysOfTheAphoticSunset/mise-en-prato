@@ -106,6 +106,68 @@ def _produto_de(con: sqlite3.Connection, cnpj: str, descricao: str, *,
     return produto_id
 
 
+def _resolver_item_produto(
+    con: sqlite3.Connection,
+    cnpj: str,
+    descricao: str,
+    *,
+    codigo_loja: str = "",
+    unidade: str = "",
+    quantidade: Decimal | None = None,
+    gtin_item: str | None = None,
+) -> tuple[int, str | None, str | None]:
+    """Resolve o produto_id, gtin_variante e sabor_adicional do item.
+
+    1. Primeiro verifica se a loja já tem mapeamento prévio em codigo_loja_produto.
+    2. Se não houver, infere o produto por descrição e associa variantes conhecidas.
+    """
+    cod_loja_str = str(codigo_loja or "").strip()
+    if cod_loja_str:
+        try:
+            mapa = con.execute(
+                """SELECT produto_id, gtin, sabor
+                     FROM codigo_loja_produto
+                    WHERE cnpj = ? AND codigo_loja = ?""",
+                (cnpj, cod_loja_str),
+            ).fetchone()
+            if mapa:
+                sabor = mapa["sabor"]
+                gtin = mapa["gtin"]
+                if not sabor and gtin:
+                    var = con.execute(
+                        "SELECT sabor FROM produto_variante WHERE produto_id = ? AND gtin = ?",
+                        (mapa["produto_id"], gtin),
+                    ).fetchone()
+                    if var and var["sabor"]:
+                        sabor = var["sabor"]
+                return mapa["produto_id"], gtin, sabor
+        except sqlite3.OperationalError:
+            pass
+
+    produto_id = _produto_de(
+        con,
+        cnpj,
+        descricao,
+        unidade=unidade,
+        quantidade=quantidade,
+        codigo_loja=codigo_loja,
+    )
+    gtin_variante = gtin_item or None
+    sabor_adicional = None
+    if gtin_variante:
+        try:
+            var = con.execute(
+                "SELECT sabor FROM produto_variante WHERE produto_id = ? AND gtin = ?",
+                (produto_id, gtin_variante),
+            ).fetchone()
+            if var and var["sabor"]:
+                sabor_adicional = var["sabor"]
+        except sqlite3.OperationalError:
+            pass
+
+    return produto_id, gtin_variante, sabor_adicional
+
+
 def _tentar_enriquecimento_local(con: sqlite3.Connection, produto_id: int) -> None:
     """Tenta enriquecer o produto a partir do catálogo satélite offline, se disponível."""
     try:
@@ -173,18 +235,23 @@ def gravar(con: sqlite3.Connection, cupom: Cupom, *, morador: str,
                  url_qr, cupom.chave),
             )
             for item in cupom.itens:
-                produto_id = _produto_de(
-                    con, cupom.estabelecimento.cnpj, item.descricao,
-                    unidade=item.unidade, quantidade=item.quantidade, codigo_loja=item.codigo_loja,
+                produto_id, gtin_var, sabor_adic = _resolver_item_produto(
+                    con,
+                    cupom.estabelecimento.cnpj,
+                    item.descricao,
+                    codigo_loja=item.codigo_loja,
+                    unidade=item.unidade,
+                    quantidade=item.quantidade,
+                    gtin_item=getattr(item, "gtin", None),
                 )
                 con.execute(
                     """INSERT INTO item (chave, seq, descricao, codigo_loja, unidade,
                                          quantidade_milesimos, unitario_centavos, total_centavos,
-                                         produto_id)
-                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                                         produto_id, gtin_variante, sabor_adicional)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                     (cupom.chave, item.seq, item.descricao, item.codigo_loja, item.unidade,
                      milesimos(item.quantidade), centavos(item.valor_unitario),
-                     centavos(item.valor_total), produto_id),
+                     centavos(item.valor_total), produto_id, gtin_var, sabor_adic),
                 )
                 if item.gtin or item.ncm:
                     con.execute(
@@ -221,18 +288,23 @@ def gravar(con: sqlite3.Connection, cupom: Cupom, *, morador: str,
              url_qr, datetime.now().isoformat(sep=" ", timespec="seconds")),
         )
         for item in cupom.itens:
-            produto_id = _produto_de(
-                con, cupom.estabelecimento.cnpj, item.descricao,
-                unidade=item.unidade, quantidade=item.quantidade, codigo_loja=item.codigo_loja,
+            produto_id, gtin_var, sabor_adic = _resolver_item_produto(
+                con,
+                cupom.estabelecimento.cnpj,
+                item.descricao,
+                codigo_loja=item.codigo_loja,
+                unidade=item.unidade,
+                quantidade=item.quantidade,
+                gtin_item=getattr(item, "gtin", None),
             )
             con.execute(
                 """INSERT INTO item (chave, seq, descricao, codigo_loja, unidade,
                                      quantidade_milesimos, unitario_centavos, total_centavos,
-                                     produto_id)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                                     produto_id, gtin_variante, sabor_adicional)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (cupom.chave, item.seq, item.descricao, item.codigo_loja, item.unidade,
                  milesimos(item.quantidade), centavos(item.valor_unitario),
-                 centavos(item.valor_total), produto_id),
+                 centavos(item.valor_total), produto_id, gtin_var, sabor_adic),
             )
             if item.gtin or item.ncm:
                 con.execute(
@@ -264,12 +336,40 @@ def ler(con: sqlite3.Connection, chave: str) -> dict | None:
     if not linha:
         return None
 
+    linhas_itens = list(con.execute("SELECT * FROM item WHERE chave = ? ORDER BY seq", (chave,)))
+    pids = {i["produto_id"] for i in linhas_itens if i["produto_id"]}
+    variantes_por_prod: dict[int, list[dict]] = {}
+    if pids:
+        try:
+            placeholders = ",".join("?" for _ in pids)
+            for v in con.execute(
+                f"""SELECT produto_id, gtin, nome, sabor, marca, nutriscore,
+                           nova_group, foto_url, eh_padrao
+                      FROM produto_variante
+                     WHERE produto_id IN ({placeholders})
+                     ORDER BY eh_padrao DESC, sabor, nome""",
+                list(pids),
+            ):
+                variantes_por_prod.setdefault(v["produto_id"], []).append(dict(v))
+        except sqlite3.OperationalError:
+            pass
+
     itens = [
-        {"seq": i["seq"], "descricao": i["descricao"], "unidade": i["unidade"],
-         "quantidade": unidades(i["quantidade_milesimos"]),
-         "valor_unitario": reais(i["unitario_centavos"]),
-         "valor_total": reais(i["total_centavos"]), "produto_id": i["produto_id"]}
-        for i in con.execute("SELECT * FROM item WHERE chave = ? ORDER BY seq", (chave,))
+        {
+            "id": i["id"],
+            "seq": i["seq"],
+            "descricao": i["descricao"],
+            "codigo_loja": i["codigo_loja"],
+            "unidade": i["unidade"],
+            "quantidade": unidades(i["quantidade_milesimos"]),
+            "valor_unitario": reais(i["unitario_centavos"]),
+            "valor_total": reais(i["total_centavos"]),
+            "produto_id": i["produto_id"],
+            "gtin_variante": i["gtin_variante"],
+            "sabor_adicional": i["sabor_adicional"],
+            "variantes": variantes_por_prod.get(i["produto_id"], []),
+        }
+        for i in linhas_itens
     ]
     return {
         "chave": linha["chave"], "loja": linha["razao"], "municipio": linha["municipio"],
@@ -371,18 +471,23 @@ def revisar(con: sqlite3.Connection, chave: str, novos_itens: list[dict], *,
     with con:
         con.execute("DELETE FROM item WHERE chave = ?", (chave,))
         for it in itens_parseados:
-            produto_id = _produto_de(
-                con, linha["cnpj"], it["descricao"],
-                unidade=it["unidade"], quantidade=it["quantidade"], codigo_loja=it["codigo_loja"]
+            produto_id, gtin_var, sabor_adic = _resolver_item_produto(
+                con,
+                linha["cnpj"],
+                it["descricao"],
+                codigo_loja=it["codigo_loja"],
+                unidade=it["unidade"],
+                quantidade=it["quantidade"],
+                gtin_item=it.get("gtin"),
             )
             con.execute(
                 """INSERT INTO item (chave, seq, descricao, codigo_loja, unidade,
                                      quantidade_milesimos, unitario_centavos, total_centavos,
-                                     produto_id)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                                     produto_id, gtin_variante, sabor_adicional)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (chave, it["seq"], it["descricao"], it["codigo_loja"], it["unidade"],
                  milesimos(it["quantidade"]), centavos(it["valor_unitario"]),
-                 centavos(it["valor_total"]), produto_id)
+                 centavos(it["valor_total"]), produto_id, gtin_var, sabor_adic),
             )
             if it["gtin"] or it["ncm"]:
                 con.execute(

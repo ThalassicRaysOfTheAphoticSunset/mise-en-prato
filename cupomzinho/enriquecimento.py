@@ -30,12 +30,24 @@ from .catalogo import (
     buscar_por_gtin,
     buscar_por_termo,
     conectar_catalogo,
+    consultar_openfoodfacts_api,
     sincronizar_gtins_existentes,
 )
 from .nfce_pr import normalizar
 from .sanidade import digito_gtin_confere
 
 log = logging.getLogger("cupomzinho.enriquecimento")
+
+
+def buscar_metadados_ean(gtin: str, timeout: int = 5) -> dict | None:
+    """Busca metadados completos de um GTIN/EAN via catálogo local ou Open Food Facts."""
+    cat = conectar_catalogo(somente_leitura=True)
+    if cat:
+        info = buscar_por_gtin(cat, gtin, consultar_online_se_faltar=True)
+        cat.close()
+        if info:
+            return info
+    return consultar_openfoodfacts_api(gtin, timeout=timeout)
 
 
 def _lojas_onde_a_casa_comprou(con: sqlite3.Connection, produto_id: int) -> set[str]:

@@ -127,11 +127,18 @@ def unificar(con: sqlite3.Connection, manter: int, juntar: int) -> dict:
         raise ValueError("produto não encontrado")
 
     with con:
-        # Move variantes de juntar para manter antes do DELETE (evita CASCADE apagar variantes)
+        # Move variantes e memórias de loja de juntar para manter antes do DELETE
         try:
-            con.execute("UPDATE OR IGNORE produto_variante SET produto_id = ? WHERE produto_id = ?",
-                        (manter, juntar))
+            con.execute(
+                "UPDATE OR IGNORE produto_variante SET produto_id = ? WHERE produto_id = ?",
+                (manter, juntar),
+            )
             con.execute("DELETE FROM produto_variante WHERE produto_id = ?", (juntar,))
+            con.execute(
+                "UPDATE OR IGNORE codigo_loja_produto SET produto_id = ? WHERE produto_id = ?",
+                (manter, juntar),
+            )
+            con.execute("DELETE FROM codigo_loja_produto WHERE produto_id = ?", (juntar,))
         except sqlite3.OperationalError:
             pass
 

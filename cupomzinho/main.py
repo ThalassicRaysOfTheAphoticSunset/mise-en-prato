@@ -943,6 +943,368 @@ def remover_variante_produto(produto_id: int, gtin: str, request: Request, _: Mo
     return responder({"ok": True, "produto": dict(prod_atualizado)})
 
 
+class AssociarItemVariante(BaseModel):
+    gtin: str | None = None
+    sabor: str | None = None
+    lembrar_loja: bool = True
+    retroagir: bool = False
+
+
+@app.post("/api/item/{item_id}/variante")
+def associar_variante_item(
+    item_id: int, dados: AssociarItemVariante, request: Request, _: Morador
+):
+    """Associa um item de cupom a um GTIN/variante e sabor específico."""
+    con = request.app.state.con
+    item = con.execute(
+        """SELECT i.*, c.cnpj
+             FROM item i JOIN cupom c ON c.chave = i.chave
+            WHERE i.id = ?""",
+        (item_id,),
+    ).fetchone()
+    if not item:
+        raise HTTPException(404, "item não encontrado")
+
+    gtin_raw = (dados.gtin or "").strip()
+    gtin_limpo = catalogo.normalizar_gtin(gtin_raw) if gtin_raw else None
+    if gtin_limpo and not sanidade.digito_gtin_confere(gtin_limpo):
+        raise HTTPException(400, "código de barras (GTIN) inválido")
+
+    sabor = (dados.sabor or "").strip() or None
+    if not gtin_limpo and not sabor:
+        raise HTTPException(400, "Informe ao menos o código de barras (GTIN) ou o sabor")
+
+    nome_variante = None
+    info_cat = None
+    if gtin_limpo:
+        cat = catalogo.conectar_catalogo(somente_leitura=True)
+        info_cat = (
+            catalogo.buscar_por_gtin(cat, gtin_limpo, consultar_online_se_faltar=True)
+            if cat
+            else None
+        )
+        if cat:
+            cat.close()
+        if not info_cat:
+            info_cat = catalogo.consultar_openfoodfacts_api(gtin_limpo)
+
+        if info_cat:
+            nome_variante = info_cat.get("nome")
+            if not sabor:
+                sabor = info_cat.get("sabor") or catalogo.extrair_sabor(
+                    info_cat.get("nome", ""), info_cat.get("marca")
+                )
+
+    produto_id = item["produto_id"]
+    if not gtin_limpo and sabor and produto_id:
+        var_existente = con.execute(
+            """SELECT gtin FROM produto_variante
+                WHERE produto_id = ? AND (LOWER(sabor) = LOWER(?) OR LOWER(nome) = LOWER(?))
+                LIMIT 1""",
+            (produto_id, sabor, sabor),
+        ).fetchone()
+        if var_existente:
+            gtin_limpo = var_existente["gtin"]
+
+    if produto_id and gtin_limpo:
+        catalogo.salvar_variantes_do_produto(
+            con,
+            produto_id,
+            [
+                {
+                    "gtin": gtin_limpo,
+                    "sabor": sabor,
+                    "nome": nome_variante or item["descricao"],
+                    "marca": info_cat.get("marca") if info_cat else None,
+                    "nutriscore": info_cat.get("nutriscore") if info_cat else None,
+                    "nova_group": info_cat.get("nova_group") if info_cat else None,
+                    "foto_url": info_cat.get("foto_url") if info_cat else None,
+                    "origem": "associacao_item",
+                }
+            ],
+        )
+
+    with con:
+        con.execute(
+            """UPDATE item
+                  SET gtin_variante = ?, sabor_adicional = ?
+                WHERE id = ?""",
+            (gtin_limpo, sabor, item_id),
+        )
+
+        if dados.lembrar_loja and item["codigo_loja"] and produto_id:
+            con.execute(
+                """INSERT INTO codigo_loja_produto
+                       (cnpj, codigo_loja, produto_id, gtin, sabor, atualizado_em)
+                   VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                   ON CONFLICT(cnpj, codigo_loja) DO UPDATE SET
+                       produto_id = excluded.produto_id,
+                       gtin = excluded.gtin,
+                       sabor = excluded.sabor,
+                       atualizado_em = excluded.atualizado_em""",
+                (item["cnpj"], item["codigo_loja"], produto_id, gtin_limpo, sabor),
+            )
+
+        itens_retroagidos = 0
+        if dados.retroagir and item["codigo_loja"]:
+            cur = con.execute(
+                """UPDATE item
+                      SET gtin_variante = COALESCE(?, gtin_variante),
+                          sabor_adicional = ?,
+                          produto_id = COALESCE(?, produto_id)
+                    WHERE codigo_loja = ?
+                      AND id != ?
+                      AND chave IN (SELECT chave FROM cupom WHERE cnpj = ?)""",
+                (gtin_limpo, sabor, produto_id, item["codigo_loja"], item_id, item["cnpj"]),
+            )
+            itens_retroagidos = cur.rowcount
+
+    item_atualizado = con.execute("SELECT * FROM item WHERE id = ?", (item_id,)).fetchone()
+    return responder({
+        "ok": True,
+        "item": dict(item_atualizado),
+        "sabor": sabor,
+        "gtin": gtin_limpo,
+        "retroagidos": itens_retroagidos,
+    })
+
+
+class DesmembrarVariante(BaseModel):
+    gtin: str
+    novo_nome: str | None = None
+    codigo_loja: str | None = None
+    cnpj: str | None = None
+
+
+@app.post("/api/produto/{produto_id}/desmembrar")
+def desmembrar_produto_variante(
+    produto_id: int, dados: DesmembrarVariante, request: Request, _: Morador
+):
+    """Separa uma variante em um novo produto autônomo, migrando compras daquele código de loja."""
+    con = request.app.state.con
+    prod_orig = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    if not prod_orig:
+        raise HTTPException(404, "produto não encontrado")
+
+    gtin_limpo = catalogo.normalizar_gtin(dados.gtin)
+    if not gtin_limpo or not sanidade.digito_gtin_confere(gtin_limpo):
+        raise HTTPException(400, "código de barras (GTIN) inválido para desmembrar")
+
+    var = con.execute(
+        "SELECT * FROM produto_variante WHERE produto_id = ? AND gtin = ?",
+        (produto_id, gtin_limpo),
+    ).fetchone()
+
+    if dados.novo_nome and dados.novo_nome.strip():
+        novo_nome = dados.novo_nome.strip()
+    elif (
+        var
+        and var["nome"]
+        and var["nome"] != "Variante"
+        and var["nome"] != prod_orig["descricao_canonica"]
+    ):
+        novo_nome = var["nome"].strip()
+    elif var and var["sabor"]:
+        novo_nome = f"{prod_orig['descricao_canonica']} {var['sabor']}".strip()
+    else:
+        novo_nome = f"{prod_orig['descricao_canonica']} (EAN {gtin_limpo})"
+
+    marca = (var["marca"] if var else None) or prod_orig["marca"]
+    nutriscore = (var["nutriscore"] if var else None) or prod_orig["nutriscore"]
+    nova_group = (var["nova_group"] if var else None) or prod_orig["nova_group"]
+    foto_url = (var["foto_url"] if var else None) or prod_orig["foto_url"]
+
+    with con:
+        cur = con.execute(
+            """INSERT INTO produto (
+                   gtin, ncm, descricao_canonica, marca, nutriscore,
+                   nova_group, foto_url, is_granel, acompanhar
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+            (
+                gtin_limpo,
+                prod_orig["ncm"],
+                novo_nome,
+                marca,
+                nutriscore,
+                nova_group,
+                foto_url,
+                prod_orig["acompanhar"],
+            ),
+        )
+        novo_id = cur.lastrowid
+
+        con.execute(
+            "DELETE FROM produto_variante WHERE produto_id = ? AND gtin = ?",
+            (produto_id, gtin_limpo),
+        )
+        con.execute(
+            """INSERT INTO produto_variante (
+                   produto_id, gtin, nome, sabor, marca, nutriscore,
+                   nova_group, foto_url, eh_padrao, origem, criado_em
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'desmembrado', datetime('now', 'localtime'))""",
+            (
+                novo_id,
+                gtin_limpo,
+                novo_nome,
+                var["sabor"] if var else None,
+                marca,
+                nutriscore,
+                nova_group,
+                foto_url,
+            ),
+        )
+
+        if prod_orig["gtin"] == gtin_limpo:
+            outra_var = con.execute(
+                """SELECT * FROM produto_variante
+                    WHERE produto_id = ?
+                    ORDER BY eh_padrao DESC LIMIT 1""",
+                (produto_id,),
+            ).fetchone()
+            if outra_var:
+                con.execute(
+                    "UPDATE produto_variante SET eh_padrao = 1 WHERE produto_id = ? AND gtin = ?",
+                    (produto_id, outra_var["gtin"]),
+                )
+                con.execute(
+                    """UPDATE produto
+                          SET gtin = ?,
+                              marca = COALESCE(?, marca),
+                              nutriscore = COALESCE(?, nutriscore),
+                              nova_group = COALESCE(?, nova_group),
+                              foto_url = COALESCE(?, foto_url)
+                        WHERE id = ?""",
+                    (
+                        outra_var["gtin"],
+                        outra_var["marca"],
+                        outra_var["nutriscore"],
+                        outra_var["nova_group"],
+                        outra_var["foto_url"],
+                        produto_id,
+                    ),
+                )
+            else:
+                con.execute(
+                    "UPDATE produto SET gtin = NULL WHERE id = ?",
+                    (produto_id,),
+                )
+
+        if dados.codigo_loja:
+            con.execute(
+                """UPDATE codigo_loja_produto
+                      SET produto_id = ?
+                    WHERE produto_id = ?
+                      AND codigo_loja = ?
+                      AND (cnpj = ? OR ? IS NULL)""",
+                (novo_id, produto_id, dados.codigo_loja, dados.cnpj, dados.cnpj),
+            )
+            cnpjs_para_mapear = [dados.cnpj] if dados.cnpj else [
+                r["cnpj"]
+                for r in con.execute(
+                    """SELECT DISTINCT c.cnpj
+                         FROM item i JOIN cupom c ON c.chave = i.chave
+                        WHERE i.produto_id = ? AND i.codigo_loja = ?""",
+                    (novo_id, dados.codigo_loja),
+                ).fetchall()
+            ]
+            for c in cnpjs_para_mapear:
+                if c:
+                    con.execute(
+                        """INSERT INTO codigo_loja_produto
+                               (cnpj, codigo_loja, produto_id, gtin, sabor, atualizado_em)
+                           VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                           ON CONFLICT(cnpj, codigo_loja) DO UPDATE SET
+                               produto_id = excluded.produto_id,
+                               gtin = excluded.gtin,
+                               sabor = excluded.sabor,
+                               atualizado_em = excluded.atualizado_em""",
+                        (c, dados.codigo_loja, novo_id, gtin_limpo, var["sabor"] if var else None),
+                    )
+        con.execute(
+            """UPDATE codigo_loja_produto
+                  SET produto_id = ?
+                WHERE produto_id = ? AND gtin = ?""",
+            (novo_id, produto_id, gtin_limpo),
+        )
+
+        sabor_var = var["sabor"] if var else None
+        if dados.codigo_loja:
+            con.execute(
+                """UPDATE item
+                      SET produto_id = ?,
+                          gtin_variante = COALESCE(gtin_variante, ?),
+                          sabor_adicional = COALESCE(sabor_adicional, ?)
+                    WHERE produto_id = ?
+                      AND (
+                          gtin_variante = ?
+                          OR (codigo_loja = ? AND (
+                              ? IS NULL OR chave IN (SELECT chave FROM cupom WHERE cnpj = ?)
+                          ))
+                      )""",
+                (
+                    novo_id,
+                    gtin_limpo,
+                    sabor_var,
+                    produto_id,
+                    gtin_limpo,
+                    dados.codigo_loja,
+                    dados.cnpj,
+                    dados.cnpj,
+                ),
+            )
+        else:
+            con.execute(
+                """UPDATE item
+                      SET produto_id = ?,
+                          gtin_variante = COALESCE(gtin_variante, ?),
+                          sabor_adicional = COALESCE(sabor_adicional, ?)
+                    WHERE produto_id = ? AND gtin_variante = ?""",
+                (novo_id, gtin_limpo, sabor_var, produto_id, gtin_limpo),
+            )
+
+        con.execute(
+            """INSERT OR IGNORE INTO preco
+                   (produto_id, cnpj, unitario_centavos, observado_em, fonte)
+               SELECT DISTINCT ?, c.cnpj, i.unitario_centavos, c.emitido_em, 'cupom'
+                 FROM item i JOIN cupom c ON c.chave = i.chave
+                WHERE i.produto_id = ?""",
+            (novo_id, novo_id),
+        )
+        con.execute(
+            """DELETE FROM preco
+                WHERE produto_id = ?
+                  AND fonte = 'cupom'
+                  AND (cnpj, unitario_centavos, observado_em) NOT IN (
+                      SELECT c.cnpj, i.unitario_centavos, c.emitido_em
+                        FROM item i JOIN cupom c ON c.chave = i.chave
+                       WHERE i.produto_id = ?
+                  )""",
+            (produto_id, produto_id),
+        )
+
+    enriquecimento.enriquecer_local(con, novo_id)
+    novo_prod = con.execute("SELECT * FROM produto WHERE id = ?", (novo_id,)).fetchone()
+
+    return responder({
+        "ok": True,
+        "novo_produto_id": novo_id,
+        "novo_produto": dict(novo_prod),
+        "gtin": gtin_limpo,
+    })
+
+
+@app.get("/api/catalogo/ean/{gtin}")
+def buscar_metadados_gtin(gtin: str, _: Morador):
+    """Consulta metadados de um GTIN/EAN no catálogo offline ou Open Food Facts."""
+    gtin_limpo = catalogo.normalizar_gtin(gtin)
+    if not gtin_limpo or not sanidade.digito_gtin_confere(gtin_limpo):
+        raise HTTPException(400, "código de barras (GTIN) inválido")
+    meta = enriquecimento.buscar_metadados_ean(gtin_limpo)
+    if not meta:
+        raise HTTPException(404, "código de barras não encontrado no catálogo")
+    return responder(meta)
+
+
 @app.post("/api/enriquecer/local")
 def enriquecer_local_produtos(_: Morador, con: Banco, quantos: int = 100):
     """Enriquece produtos pendentes usando o catálogo satélite offline."""

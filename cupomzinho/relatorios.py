@@ -212,7 +212,10 @@ def historico_do_produto(con: sqlite3.Connection, produto_id: int) -> dict:
         {"data": r["emitido_em"], "loja": r["razao"],
          "quantidade": unidades(r["quantidade_milesimos"]), "unidade": r["unidade"],
          "valor_unitario": reais(r["unitario_centavos"]),
-         "valor_total": reais(r["total_centavos"])}
+         "valor_total": reais(r["total_centavos"]),
+         "codigo_loja": r["codigo_loja"],
+         "gtin_variante": r["gtin_variante"],
+         "sabor_adicional": r["sabor_adicional"]}
         for r in con.execute("""
             SELECT i.*, c.emitido_em, e.razao
               FROM item i JOIN cupom c ON c.chave = i.chave

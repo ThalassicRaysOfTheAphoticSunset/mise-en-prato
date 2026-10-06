@@ -59,6 +59,7 @@ def criar_esquema_catalogo(con: sqlite3.Connection) -> None:
             CREATE TABLE IF NOT EXISTS catalogo_produto (
                 gtin        TEXT PRIMARY KEY,
                 nome        TEXT NOT NULL,
+                sabor       TEXT,
                 marca       TEXT,
                 categoria   TEXT,
                 ncm         TEXT,
@@ -68,6 +69,10 @@ def criar_esquema_catalogo(con: sqlite3.Connection) -> None:
                 origem      TEXT NOT NULL DEFAULT 'openfoodfacts'
             )
         """)
+        try:
+            con.execute("ALTER TABLE catalogo_produto ADD COLUMN sabor TEXT")
+        except sqlite3.OperationalError:
+            pass
         con.execute("CREATE INDEX IF NOT EXISTS idx_cat_gtin ON catalogo_produto(gtin)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_cat_nome ON catalogo_produto(nome)")
 
@@ -82,7 +87,7 @@ def consultar_openfoodfacts_api(gtin: str, timeout: int = 5) -> dict | None:
     cod = normalizar_gtin(gtin)
     if not cod or not digito_gtin_confere(cod):
         return None
-    url = f"https://world.openfoodfacts.org/api/v2/product/{cod}.json"
+    url = f"https://world.openfoodfacts.org/api/v0/product/{cod}.json"
     req = urllib.request.Request(
         url,
         headers={
@@ -102,6 +107,9 @@ def consultar_openfoodfacts_api(gtin: str, timeout: int = 5) -> dict | None:
     except Exception as erro:
         log.debug("Consulta ao OFF para %s falhou: %s", cod, erro)
     return None
+
+
+buscar_metadados_gtin_off = consultar_openfoodfacts_api
 
 
 def buscar_por_gtin(
@@ -164,11 +172,13 @@ def inserir_produtos(con: sqlite3.Connection, produtos: list[dict]) -> int:
 
     sql = """
         INSERT INTO catalogo_produto (
-            gtin, nome, marca, categoria, ncm, nutriscore, nova_group, foto_url, origem
+            gtin, nome, sabor, marca, categoria, ncm, nutriscore, nova_group, foto_url, origem
         ) VALUES (
-            :gtin, :nome, :marca, :categoria, :ncm, :nutriscore, :nova_group, :foto_url, :origem
+            :gtin, :nome, :sabor, :marca, :categoria, :ncm,
+            :nutriscore, :nova_group, :foto_url, :origem
         ) ON CONFLICT(gtin) DO UPDATE SET
             nome = excluded.nome,
+            sabor = COALESCE(excluded.sabor, catalogo_produto.sabor),
             marca = COALESCE(excluded.marca, catalogo_produto.marca),
             categoria = COALESCE(excluded.categoria, catalogo_produto.categoria),
             ncm = COALESCE(excluded.ncm, catalogo_produto.ncm),
@@ -184,6 +194,7 @@ def inserir_produtos(con: sqlite3.Connection, produtos: list[dict]) -> int:
                 {
                     "gtin": p["gtin"],
                     "nome": p["nome"].strip(),
+                    "sabor": p.get("sabor"),
                     "marca": p.get("marca"),
                     "categoria": p.get("categoria"),
                     "ncm": p.get("ncm"),
@@ -200,7 +211,7 @@ def inserir_produtos(con: sqlite3.Connection, produtos: list[dict]) -> int:
 
 
 def parse_openfoodfacts_dict(raw: dict) -> dict | None:
-    """Interpreta um dicionário bruto do dump JSONL do Open Food Facts."""
+    """Interpreta um dicionário bruto do dump ou API v0 do Open Food Facts."""
     cod = normalizar_gtin(raw.get("code") or "")
     if not cod or not digito_gtin_confere(cod):
         return None
@@ -217,6 +228,17 @@ def parse_openfoodfacts_dict(raw: dict) -> dict | None:
     marca = (raw.get("brands") or "").strip() or None
     categoria = (raw.get("categories") or "").strip() or None
 
+    sabor_raw = (
+        raw.get("flavor")
+        or raw.get("flavour")
+        or ""
+    ).strip()
+    if sabor_raw:
+        sabor = sabor_raw
+    else:
+        generico = (raw.get("generic_name_pt") or raw.get("generic_name") or "").strip()
+        sabor = extrair_sabor(generico, marca) if generico else extrair_sabor(nome, marca)
+
     nutriscore = (raw.get("nutriscore_grade") or "").strip().upper() or None
     if nutriscore and nutriscore not in ("A", "B", "C", "D", "E"):
         nutriscore = None
@@ -228,8 +250,8 @@ def parse_openfoodfacts_dict(raw: dict) -> dict | None:
         nova_group = None
 
     foto_url = (
-        raw.get("image_front_url")
-        or raw.get("image_url")
+        raw.get("image_url")
+        or raw.get("image_front_url")
         or raw.get("image_small_url")
         or None
     )
@@ -237,6 +259,7 @@ def parse_openfoodfacts_dict(raw: dict) -> dict | None:
     return {
         "gtin": cod,
         "nome": nome,
+        "sabor": sabor or None,
         "marca": marca,
         "categoria": categoria,
         "ncm": None,
@@ -562,13 +585,36 @@ def salvar_variantes_do_produto(
     inseridos = 0
     gtins_processados = []
 
+    prod_pai = con_principal.execute(
+        "SELECT descricao_canonica FROM produto WHERE id = ?", (produto_id,)
+    ).fetchone()
+    desc_pai = prod_pai["descricao_canonica"] if prod_pai else ""
+
     for v in variantes:
         gtin = normalizar_gtin(v.get("gtin") or "")
         if not gtin or not digito_gtin_confere(gtin):
             continue
 
-        info_cat = buscar_por_gtin(cat, gtin) if cat else None
-        nome = v.get("nome") or (info_cat.get("nome") if info_cat else "") or "Variante"
+        info_cat = buscar_por_gtin(cat, gtin, consultar_online_se_faltar=True) if cat else None
+        if not info_cat:
+            info_cat = consultar_openfoodfacts_api(gtin)
+            if info_cat and cat:
+                try:
+                    inserir_produtos(cat, [info_cat])
+                except Exception:
+                    pass
+
+        nome_fornecido = (v.get("nome") or "").strip()
+        nome_cat = (info_cat.get("nome") or "").strip() if info_cat else ""
+        if nome_cat and (
+            not nome_fornecido
+            or nome_fornecido in ("Variante", desc_pai)
+            or len(nome_cat) > len(nome_fornecido)
+        ):
+            nome = nome_cat
+        else:
+            nome = nome_fornecido or nome_cat or "Variante"
+
         marca = v.get("marca") or (info_cat.get("marca") if info_cat else None)
         nutriscore = v.get("nutriscore") or (info_cat.get("nutriscore") if info_cat else None)
         nova_group = (
@@ -577,11 +623,17 @@ def salvar_variantes_do_produto(
             else (info_cat.get("nova_group") if info_cat else None)
         )
         foto_url = v.get("foto_url") or (info_cat.get("foto_url") if info_cat else None)
-        sabor = v.get("sabor") or extrair_sabor(nome, marca)
+        sabor_cat = (info_cat.get("sabor") or "").strip() if info_cat else ""
+        sabor = (v.get("sabor") or "").strip() or sabor_cat or extrair_sabor(nome, marca)
 
         eh_pad = 1 if (gtin_padrao and gtin == gtin_padrao) or v.get("eh_padrao") else 0
 
         with con_principal:
+            if eh_pad == 1:
+                con_principal.execute(
+                    "UPDATE produto_variante SET eh_padrao = 0 WHERE produto_id = ?",
+                    (produto_id,),
+                )
             con_principal.execute(
                 """
                 INSERT INTO produto_variante (
