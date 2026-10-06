@@ -69,9 +69,11 @@ def itens(con: sqlite3.Connection, lista_id: int) -> list[dict]:
     return [
         {"produto_id": r["produto_id"],
          "descricao": r["apelido"] or r["descricao_canonica"],
-         "gtin": r["gtin"], "quantidade": unidades(r["quantidade_milesimos"])}
+         "gtin": r["gtin"], "quantidade": unidades(r["quantidade_milesimos"]),
+         "is_granel": bool(r["is_granel"])}
         for r in con.execute("""
-            SELECT li.produto_id, li.quantidade_milesimos, p.descricao_canonica, p.apelido, p.gtin
+            SELECT li.produto_id, li.quantidade_milesimos, p.descricao_canonica,
+                   p.apelido, p.gtin, p.is_granel
               FROM lista_item li JOIN produto p ON p.id = li.produto_id
              WHERE li.lista_id = ? ORDER BY p.descricao_canonica""", (lista_id,))
     ]
@@ -85,9 +87,10 @@ def sugerir(con: sqlite3.Connection, limite: int = 20) -> list[dict]:
     """
     return [
         {"produto_id": r["id"], "descricao": r["apelido"] or r["descricao_canonica"],
-         "compras": r["compras"], "ultimo": reais(r["ultimo"])}
+         "compras": r["compras"], "ultimo": reais(r["ultimo"]),
+         "is_granel": bool(r["is_granel"])}
         for r in con.execute("""
-            SELECT p.id, p.descricao_canonica, p.apelido,
+            SELECT p.id, p.descricao_canonica, p.apelido, p.is_granel,
                    COUNT(DISTINCT i.chave) AS compras,
                    (SELECT i2.unitario_centavos FROM item i2
                       JOIN cupom c2 ON c2.chave = i2.chave
@@ -95,6 +98,7 @@ def sugerir(con: sqlite3.Connection, limite: int = 20) -> list[dict]:
               FROM produto p JOIN item i ON i.produto_id = p.id
              GROUP BY p.id ORDER BY compras DESC, p.descricao_canonica LIMIT ?""", (limite,))
     ]
+
 
 
 # ── a comparação ─────────────────────────────────────────────────────────────

@@ -428,21 +428,47 @@ carregadores.lista = async () => {
   }
   $('#lista-sugestoes').innerHTML = sugestoes.map((s) => `
     <div class="linha clicavel" onclick="porNaLista(${s.produto_id})">
-      <div>${s.descricao}<div class="fraca">${s.compras}
-        ${s.compras > 1 ? 'compras' : 'compra'} · último ${dinheiro(s.ultimo)}</div></div>
+      <div>${s.descricao}
+        <div class="fraca">
+          ${s.is_granel ? '<span class="selo">⚖️ Granel</span> · ' : ''}
+          ${s.compras} ${s.compras > 1 ? 'compras' : 'compra'} · último ${dinheiro(s.ultimo)}
+        </div>
+      </div>
       <span class="acao" style="padding:.3rem .7rem">+</span>
     </div>`).join('');
 };
 
+const _itensListaMap = {};
+const _debounceQtd = {};
+
 async function desenharLista() {
   const { itens, comparacao } = await api('/api/lista/' + listaAtual);
+  for (const k in _itensListaMap) delete _itensListaMap[k];
+  itens.forEach((i) => { _itensListaMap[i.produto_id] = i; });
+
   $('#lista-itens').innerHTML = itens.length
-    ? itens.map((i) => `
-        <div class="linha">
-          <div>${i.descricao}<div class="fraca">${quantia(i.quantidade)}
-            ${i.gtin ? '· com código de barras' : ''}</div></div>
-          <span class="clicavel fraca" onclick="tirarDaLista(${i.produto_id})">remover</span>
-        </div>`).join('')
+    ? itens.map((i) => {
+        const granel = Boolean(i.is_granel);
+        const passo = granel ? 0.25 : 1;
+        const sufixo = granel ? ' kg' : '';
+        const rotuloQtd = `${quantia(i.quantidade)}${sufixo}`;
+        return `
+        <div class="item-lista-linha" id="item-lista-${i.produto_id}">
+          <div class="item-lista-info">
+            <div><strong>${i.descricao}</strong></div>
+            <div class="fraca">
+              ${granel ? '<span class="selo">⚖️ Granel</span> ' : ''}
+              ${i.gtin ? '<span class="selo">código de barras</span> ' : ''}
+              <span class="clicavel fraca" style="margin-left:.4rem;text-decoration:underline" onclick="tirarDaLista(${i.produto_id})">remover</span>
+            </div>
+          </div>
+          <div class="stepper">
+            <button type="button" class="btn-step" onclick="passoQtd(${i.produto_id}, -${passo})" aria-label="Diminuir">−</button>
+            <button type="button" class="btn-qtd-chip" onclick="abrirAjusteQtd(${i.produto_id})" id="chip-qtd-${i.produto_id}" title="Ajustar quantidade">${rotuloQtd}</button>
+            <button type="button" class="btn-step" onclick="passoQtd(${i.produto_id}, +${passo})" aria-label="Aumentar">+</button>
+          </div>
+        </div>`;
+      }).join('')
     : '<div class="fraca">Lista vazia. Escolha abaixo o que a casa costuma comprar.</div>';
   $('#lista-acao').innerHTML = itens.length ? `
     <button class="acao" style="width:100%;margin-top:.8rem" onclick="pesquisarPrecos()">
@@ -451,6 +477,93 @@ async function desenharLista() {
       quando você aperta — a app nunca consulta sozinha.</p>` : '';
   desenharComparacao(comparacao);
 }
+
+window.passoQtd = (produto_id, delta) => {
+  const item = _itensListaMap[produto_id];
+  if (!item) return;
+  const atual = Number(item.quantidade);
+  const nova = Math.max(0, Math.round((atual + delta) * 1000) / 1000);
+  if (nova <= 0) {
+    window.tirarDaLista(produto_id);
+    return;
+  }
+  item.quantidade = nova;
+  const chip = document.getElementById('chip-qtd-' + produto_id);
+  if (chip) {
+    chip.textContent = quantia(nova) + (item.is_granel ? ' kg' : '');
+  }
+  navigator.vibrate?.(12);
+
+  clearTimeout(_debounceQtd[produto_id]);
+  _debounceQtd[produto_id] = setTimeout(async () => {
+    await api(`/api/lista/${listaAtual}/item`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ produto_id, quantidade: String(nova) }),
+    });
+    const { comparacao } = await api('/api/lista/' + listaAtual);
+    desenharComparacao(comparacao);
+  }, 350);
+};
+
+window.abrirAjusteQtd = (produto_id) => {
+  const item = _itensListaMap[produto_id];
+  if (!item) return;
+  const modalAntigo = document.getElementById('modal-ajuste-qtd');
+  if (modalAntigo) modalAntigo.remove();
+
+  const granel = Boolean(item.is_granel);
+  const presets = granel
+    ? [0.25, 0.5, 0.75, 1, 1.5, 2]
+    : [1, 2, 3, 4, 6, 12];
+
+  const modal = document.createElement('div');
+  modal.id = 'modal-ajuste-qtd';
+  modal.className = 'modal-fundo';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  modal.innerHTML = `
+    <div class="modal-gaveta" onclick="event.stopPropagation()">
+      <div class="linha">
+        <strong>${item.descricao}</strong>
+        <span class="clicavel fraca" onclick="document.getElementById('modal-ajuste-qtd').remove()">✕</span>
+      </div>
+      <div class="fraca" style="margin-top:.2rem">Ajustar quantidade ${granel ? '(em kg)' : '(unidades)'}</div>
+      <div class="presets-grid">
+        ${presets.map((p) => `<button type="button" class="btn-preset" onclick="definirQtdDireta(${produto_id}, ${p})">${quantia(p)}${granel ? ' kg' : ''}</button>`).join('')}
+      </div>
+      <form id="form-ajuste-qtd" onsubmit="event.preventDefault(); salvarInputQtd(${produto_id});" style="display:flex;gap:.5rem;margin-top:.6rem">
+        <input type="number" id="input-qtd-modal" step="${granel ? '0.001' : '1'}" min="0.001" value="${item.quantidade}" required autofocus style="flex:1">
+        <button type="submit" class="acao">Salvar</button>
+      </form>
+    </div>`;
+  document.body.appendChild(modal);
+  setTimeout(() => {
+    const inp = document.getElementById('input-qtd-modal');
+    if (inp) { inp.focus(); inp.select(); }
+  }, 50);
+};
+
+window.definirQtdDireta = async (produto_id, valor) => {
+  const modal = document.getElementById('modal-ajuste-qtd');
+  if (modal) modal.remove();
+  const item = _itensListaMap[produto_id];
+  if (item) item.quantidade = valor;
+  await api(`/api/lista/${listaAtual}/item`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ produto_id, quantidade: String(valor) }),
+  });
+  desenharLista();
+};
+
+window.salvarInputQtd = async (produto_id) => {
+  const inp = document.getElementById('input-qtd-modal');
+  if (!inp) return;
+  const valor = Number(inp.value.replace(',', '.'));
+  if (isNaN(valor) || valor <= 0) return;
+  window.definirQtdDireta(produto_id, valor);
+};
+
 
 /* A cobertura vem SEMPRE colada no total. Loja que só tem metade da lista
    parece a mais barata, e deixá-la ganhar calada seria mentir com número

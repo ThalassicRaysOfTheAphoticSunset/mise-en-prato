@@ -68,6 +68,22 @@ def test_sugestao_vem_do_que_a_casa_compra(con):
     assert sugeridos[0]["ultimo"] is not None
 
 
+def test_itens_e_sugestoes_refletem_granel(con):
+    lista = criar(con, "semana", "Miguel")
+    repolho = _produto(con, "REPOLHO")
+    atum = _produto(con, "ATUM")
+    por_produto(con, lista, repolho, Decimal("0.500"))
+    por_produto(con, lista, atum, Decimal("1.000"))
+
+    guardados = {i["produto_id"]: i for i in itens(con, lista)}
+    assert guardados[repolho]["is_granel"] is True
+    assert guardados[atum]["is_granel"] is False
+
+    sugeridos = {s["produto_id"]: s for s in sugerir(con)}
+    assert sugeridos[repolho]["is_granel"] is True
+    assert sugeridos[atum]["is_granel"] is False
+
+
 def test_loja_mais_barata_com_a_lista_inteira_ganha(con):
     lista = criar(con, "semana", "Miguel")
     atum, leite = _produto(con, "ATUM"), _produto(con, "LEITE FRIMESA INT")

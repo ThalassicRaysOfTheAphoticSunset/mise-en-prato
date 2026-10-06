@@ -141,3 +141,61 @@ svg.grafico text { fill: var(--fraca); font-size: 10px; }
 .cartao-falha .info { padding: .4rem .5rem; font-size: .75rem; }
 .cartao-falha .info .data { font-weight: 600; color: var(--tinta); }
 .cartao-falha .info .meta { color: var(--fraca); margin-top: .15rem; }
+
+/* ── stepper e controles de lista de compras ──────────────────────────────── */
+.item-lista-linha {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: .8rem;
+}
+.item-lista-info { flex: 1; min-width: 0; }
+.item-lista-info strong { display: block; word-break: break-word; }
+.stepper {
+  display: inline-flex; align-items: stretch;
+  background: var(--realce); border: 1px solid var(--borda);
+  border-radius: 10px; overflow: hidden; user-select: none;
+  flex-shrink: 0;
+}
+.btn-step {
+  background: none; border: 0; color: var(--tinta);
+  font: inherit; font-weight: 700; font-size: 1.15rem;
+  padding: .3rem .65rem; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  min-width: 2.3rem; min-height: 2.2rem;
+  touch-action: manipulation; transition: background .15s;
+}
+.btn-step:active { background: var(--borda); }
+.btn-qtd-chip {
+  background: none; border: 0;
+  border-left: 1px solid var(--borda); border-right: 1px solid var(--borda);
+  color: var(--tinta); font: inherit; font-size: .88rem; font-weight: 600;
+  padding: .3rem .55rem; cursor: pointer; min-width: 3.4rem;
+  text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.btn-qtd-chip:active { background: var(--borda); }
+
+/* Modal / Gaveta de ajuste fino de quantidade */
+.modal-fundo {
+  position: fixed; inset: 0; background: rgba(0,0,0,.5);
+  backdrop-filter: blur(2px); z-index: 100;
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.modal-gaveta {
+  background: var(--painel); border-top: 1px solid var(--borda);
+  border-radius: 18px 18px 0 0; padding: 1.2rem;
+  width: 100%; max-width: 32rem; box-shadow: 0 -4px 20px rgba(0,0,0,.25);
+  animation: deslizarCima .2s ease-out;
+}
+@keyframes deslizarCima {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+.presets-grid {
+  display: flex; flex-wrap: wrap; gap: .4rem; margin: .8rem 0;
+}
+.btn-preset {
+  background: var(--realce); border: 1px solid var(--borda);
+  border-radius: 8px; color: var(--tinta); padding: .4rem .7rem;
+  font: inherit; font-size: .88rem; cursor: pointer; font-weight: 500;
+}
+.btn-preset:active { border-color: var(--verde); color: var(--verde); }
+
