@@ -26,7 +26,12 @@ import re
 import sqlite3
 
 from .banco import reais
-from .catalogo import buscar_por_gtin, buscar_por_termo, conectar_catalogo
+from .catalogo import (
+    buscar_por_gtin,
+    buscar_por_termo,
+    conectar_catalogo,
+    sincronizar_gtins_existentes,
+)
 from .nfce_pr import normalizar
 from .sanidade import digito_gtin_confere
 
@@ -147,7 +152,7 @@ def enriquecer_local(
 
     # Caso 1: O produto já possui GTIN (ex: veio do SPED cEAN ou de enriquecimento anterior)
     if gtin_atual:
-        info = buscar_por_gtin(cat, gtin_atual)
+        info = buscar_por_gtin(cat, gtin_atual, consultar_online_se_faltar=True)
         if info:
             aplicar(
                 con,
@@ -239,18 +244,19 @@ def enriquecer(
             "novo": False,
         }
 
-    # Degrau 1: Catálogo Satélite Local (Offline, sem requisição de rede)
-    res_local = enriquecer_local(con, produto_id, con_catalogo)
-    if res_local["novo"]:
-        return res_local
-
     if produto["gtin"]:
+        enriquecer_local(con, produto_id, con_catalogo)
         return {
             "produto_id": produto_id,
             "gtin": produto["gtin"],
             "motivo": "já tinha código de barras",
             "novo": False,
         }
+
+    # Degrau 1: Catálogo Satélite Local (Offline, sem requisição de rede)
+    res_local = enriquecer_local(con, produto_id, con_catalogo)
+    if res_local["novo"]:
+        return res_local
 
     # Degrau 2: Menor Preço CELEPAR (sob demanda com teto horário)
     descricao = produto["descricao_canonica"]
@@ -294,10 +300,18 @@ def enriquecer_pendentes_local(
     con_catalogo: sqlite3.Connection | None = None,
     limite: int = 100,
 ) -> dict:
-    """Percorre os produtos pendentes e enriquece os possíveis usando o catálogo local."""
-    relatorio = {"identificados": [], "sem_certeza": []}
+    """Percorre produtos com GTIN sem metadados e produtos sem GTIN, enriquecendo via catálogo."""
+    cat = con_catalogo if con_catalogo is not None else conectar_catalogo(criar=True)
+    relatorio = {"identificados": [], "sem_certeza": [], "metadados_atualizados": 0}
+
+    # 1. Atualiza produtos que já têm GTIN mas faltam marca/nutriscore/nova
+    if cat:
+        sync = sincronizar_gtins_existentes(con, cat, limite=limite)
+        relatorio["metadados_atualizados"] = sync.get("atualizados", 0)
+
+    # 2. Tenta resolver itens pendentes sem GTIN
     for pendente in pendentes(con, limite):
-        r = enriquecer_local(con, pendente["produto_id"], con_catalogo)
+        r = enriquecer_local(con, pendente["produto_id"], cat)
         alvo = "identificados" if r["novo"] else "sem_certeza"
         relatorio[alvo].append(
             {"descricao": r["descricao"], "gtin": r.get("gtin"), "motivo": r["motivo"]}

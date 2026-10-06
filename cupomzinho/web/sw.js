@@ -1,7 +1,7 @@
 /* Service worker mínimo: guarda só o esqueleto da PWA para ela abrir instalada
    e sem rede. Dado NUNCA é cacheado — gasto velho na tela é pior que tela
    vazia, e o banco é a única verdade. */
-const CACHE = 'cupomzinho-v4';   // v4: catalogo satelite offline, perfil nutricional NOVA e badges
+const CACHE = 'cupomzinho-v5';   // v5: resolucao manual de GTIN e sync automatico Open Food Facts
 const ESQUELETO = ['/', '/estilo.css', '/app.js', '/icone.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (ev) => {

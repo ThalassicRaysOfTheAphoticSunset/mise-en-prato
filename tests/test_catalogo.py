@@ -169,3 +169,60 @@ def test_ingestar_openfoodfacts_stream(tmp_path, db_catalogo):
     stats = estatisticas_catalogo(db_catalogo)
     assert stats["total"] == 2
     assert stats["por_origem"].get("openfoodfacts") == 2
+
+
+def test_consultar_openfoodfacts_api_invalido():
+    from cupomzinho.catalogo import consultar_openfoodfacts_api
+
+    assert consultar_openfoodfacts_api("") is None
+    assert consultar_openfoodfacts_api("123") is None
+    assert consultar_openfoodfacts_api("7891167011770") is None  # digito invalido
+
+
+def test_sincronizar_gtins_existentes(db_catalogo):
+    import sqlite3
+
+    from cupomzinho.catalogo import inserir_produtos, sincronizar_gtins_existentes
+
+    # Insere produto no catálogo de teste
+    inserir_produtos(
+        db_catalogo,
+        [
+            {
+                "gtin": "7891000100103",
+                "nome": "LEITE PIRACANJUBA",
+                "marca": "PIRACANJUBA",
+                "nutriscore": "B",
+                "nova_group": 1,
+            }
+        ],
+    )
+
+    # Cria banco principal em memória
+    con_p = sqlite3.connect(":memory:")
+    con_p.row_factory = sqlite3.Row
+    con_p.execute("""
+        CREATE TABLE produto (
+            id INTEGER PRIMARY KEY,
+            descricao_canonica TEXT,
+            gtin TEXT,
+            marca TEXT,
+            nutriscore TEXT,
+            nova_group INTEGER,
+            foto_url TEXT
+        )
+    """)
+    con_p.execute(
+        "INSERT INTO produto (id, descricao_canonica, gtin) VALUES (1, 'LEITE 1L', '7891000100103')"
+    )
+    con_p.commit()
+
+    res = sincronizar_gtins_existentes(con_p, db_catalogo, limite=10)
+    assert res["atualizados"] == 1
+    assert res["total"] == 1
+
+    prod = con_p.execute("SELECT * FROM produto WHERE id = 1").fetchone()
+    assert prod["marca"] == "PIRACANJUBA"
+    assert prod["nutriscore"] == "B"
+    assert prod["nova_group"] == 1
+

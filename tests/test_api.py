@@ -432,3 +432,30 @@ def test_catalogo_status_e_enriquecimento_local(cliente, tmp_path):
     assert any(i["gtin"] == "7891167011779" for i in dados_enriq["identificados"])
 
 
+def test_buscar_candidatos_e_definir_gtin_manual(cliente):
+    # Pega um produto
+    res = cliente.get("/api/produtos")
+    assert res.status_code == 200
+    prods = res.json()["produtos"]
+    assert len(prods) > 0
+    p = prods[0]
+
+    # Busca candidatos
+    r_cand = cliente.get(f"/api/produto/{p['id']}/candidatos")
+    assert r_cand.status_code == 200
+    dados_cand = r_cand.json()
+    assert "candidatos" in dados_cand
+    assert dados_cand["produto_id"] == p["id"]
+
+    # Tentativa com GTIN inválido (dígito errado)
+    r_invalido = cliente.post(f"/api/produto/{p['id']}/gtin", json={"gtin": "7891167011770"})
+    assert r_invalido.status_code == 400
+
+    # Atribuição com GTIN válido (Atum Gomes da Costa)
+    r_valido = cliente.post(f"/api/produto/{p['id']}/gtin", json={"gtin": "7891167011779"})
+    assert r_valido.status_code == 200
+    dados_valido = r_valido.json()
+    assert dados_valido["ok"] is True
+    assert dados_valido["produto"]["gtin"] == "7891167011779"
+
+

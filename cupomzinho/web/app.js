@@ -564,12 +564,13 @@ async function desenharEnriquecimento() {
 
 window.enriquecerPeloCatalogoLocal = async () => {
   const caixa = $('#enriquecer-estado');
-  caixa.innerHTML = '<div class="estado">Buscando no catálogo local satélite (offline)…</div>';
+  caixa.innerHTML = '<div class="estado">Buscando no catálogo satélite (offline/Open Food Facts)…</div>';
   try {
     const r = await api('/api/enriquecer/local?quantos=100', { method: 'POST' });
     caixa.innerHTML = `
       <div class="estado">
-        ${r.identificados.length} identificados offline · ${r.restantes} ainda pendentes
+        ${r.metadados_atualizados ? `<strong>${r.metadados_atualizados} produtos enriquecidos com nutrição/marca</strong> · ` : ''}
+        ${r.identificados.length} novos GTINs · ${r.restantes} pendentes
       </div>
       ${r.identificados.map((p) => `<div class="linha"><span>${p.descricao}</span>
         <span class="selo">${p.gtin}</span></div>`).join('')}`;
@@ -914,6 +915,21 @@ window.verProduto = async (id) => {
         <span class="num">${dinheiro(p.mediana_paga)}</span></div>
       <div class="linha"><span class="fraca">maior pago</span>
         <span class="num">${dinheiro(p.maior_pago)}</span></div>
+      ${!p.gtin && !p.is_granel ? `
+        <div class="cartao" style="margin-top:.8rem;border-left:3px solid var(--laranja,#f59e0b);background:rgba(245,158,11,0.04)">
+          <div class="linha">
+            <strong>Código de barras não associado</strong>
+          </div>
+          <div class="fraca" style="margin:.3rem 0 .5rem">
+            Sem o código GTIN, este produto não se unifica com outros mercados e não possui perfil nutricional.
+          </div>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+            <button class="acao" onclick="buscarCandidatosGtin(${p.id})">Buscar candidatos (Menor Preço)</button>
+            <button class="btn-secundario" onclick="mostrarInputGtinManual(${p.id})">Digitar código da embalagem</button>
+          </div>
+          <div id="painel-candidatos-${p.id}" style="margin-top:.6rem"></div>
+        </div>
+      ` : ''}
       <h2>Histórico de preços</h2>
       ${graficoHtml}
       <h2>Suas compras</h2>
@@ -921,6 +937,58 @@ window.verProduto = async (id) => {
     </div>`;
   ativarInteracaoGraficoHistorico(p);
   $('#produto-detalhe').scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+window.buscarCandidatosGtin = async (id) => {
+  const painel = $(`#painel-candidatos-${id}`);
+  painel.innerHTML = '<div class="estado">Consultando candidatos…</div>';
+  try {
+    const { candidatos } = await api(`/api/produto/${id}/candidatos`);
+    if (!candidatos || !candidatos.length) {
+      painel.innerHTML = '<div class="fraca">Nenhum código candidato encontrado. Digite manualmente se tiver a embalagem.</div>';
+      return;
+    }
+    painel.innerHTML = `
+      <div class="fraca" style="margin-bottom:.4rem">Selecione o produto correspondente:</div>
+      ${candidatos.map((c) => `
+        <div class="linha" style="margin-bottom:.4rem;padding:.5rem;background:var(--painel);border:1px solid var(--borda);border-radius:6px">
+          <div style="flex:1">
+            <div><strong style="font-family:monospace">${c.gtin}</strong> · ${c.descricao}</div>
+            <div class="fraca">${c.preco ? dinheiro(c.preco) : ''} ${c.loja ? `· ${c.loja}` : ''}</div>
+          </div>
+          <button class="acao" onclick="atribuirGtin(${id}, '${c.gtin}')">Usar este</button>
+        </div>
+      `).join('')}
+    `;
+  } catch (err) {
+    painel.innerHTML = `<div class="estado ruim">${err.message}</div>`;
+  }
+};
+
+window.mostrarInputGtinManual = (id) => {
+  const painel = $(`#painel-candidatos-${id}`);
+  painel.innerHTML = `
+    <div style="display:flex;gap:.5rem;margin-top:.4rem;align-items:center">
+      <input type="text" id="input-gtin-${id}" placeholder="Código EAN/GTIN (ex: 789...)" style="flex:1;padding:.4rem;font-family:monospace">
+      <button class="acao" onclick="atribuirGtin(${id}, $('#input-gtin-${id}').value)">Salvar</button>
+    </div>
+  `;
+};
+
+window.atribuirGtin = async (id, gtin) => {
+  const painel = $(`#painel-candidatos-${id}`);
+  painel.innerHTML = '<div class="estado">Salvando e buscando dados nutricionais…</div>';
+  try {
+    await api(`/api/produto/${id}/gtin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gtin }),
+    });
+    verProduto(id);
+    carregadores.produtos();
+  } catch (err) {
+    painel.innerHTML = `<div class="estado ruim">${err.message}</div>`;
+  }
 };
 
 /* ── lista de compras ─────────────────────────────────────────────────────── */

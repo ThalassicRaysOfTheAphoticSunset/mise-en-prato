@@ -31,6 +31,7 @@ from . import (
     listas,
     menor_preco,
     relatorios,
+    sanidade,
     tarefas,
     unificacao,
 )
@@ -773,6 +774,94 @@ def status_catalogo(_: Morador):
     stats = catalogo.estatisticas_catalogo(con_cat)
     con_cat.close()
     return responder({"disponivel": True, **stats})
+
+
+@app.get("/api/produto/{produto_id}/candidatos")
+def buscar_candidatos_gtin(produto_id: int, request: Request, _: Morador):
+    """Busca no Menor Preço e catálogo os códigos candidatos para um produto ambíguo."""
+    con = request.app.state.con
+    prod = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    if not prod:
+        raise HTTPException(404, "produto não encontrado")
+
+    descricao = prod["descricao_canonica"]
+    cliente = menor_preco.MenorPreco(con)
+    try:
+        achados = cliente.buscar(termo=descricao)
+    except menor_preco.TetoAtingido as erro:
+        raise HTTPException(429, str(erro)) from erro
+    except Exception:
+        achados = []
+
+    candidatos_map = {}
+    for a in achados:
+        gtin = str(a.get("gtin") or "").strip()
+        if not gtin or not sanidade.digito_gtin_confere(gtin):
+            continue
+        if gtin not in candidatos_map:
+            candidatos_map[gtin] = {
+                "gtin": gtin,
+                "descricao": a.get("descricao") or descricao,
+                "preco": float(a.get("preco") or 0),
+                "loja": a.get("loja") or "Mercado local",
+                "data": a.get("data") or "",
+                "ocorrencias": 1,
+            }
+        else:
+            candidatos_map[gtin]["ocorrencias"] += 1
+
+    cat = catalogo.conectar_catalogo(somente_leitura=True)
+    if cat:
+        for item in catalogo.buscar_por_termo(cat, descricao, limite=5):
+            g = item["gtin"]
+            if g not in candidatos_map:
+                candidatos_map[g] = {
+                    "gtin": g,
+                    "descricao": item["nome"],
+                    "preco": 0.0,
+                    "loja": item.get("marca") or "Catálogo",
+                    "data": "",
+                    "ocorrencias": 1,
+                }
+        cat.close()
+
+    return responder(
+        {
+            "produto_id": produto_id,
+            "descricao": descricao,
+            "candidatos": list(candidatos_map.values()),
+        }
+    )
+
+
+class DefinirGtin(BaseModel):
+    gtin: str
+
+
+@app.post("/api/produto/{produto_id}/gtin")
+def definir_gtin_produto(produto_id: int, dados: DefinirGtin, request: Request, _: Morador):
+    """Atribui manualmente um GTIN ao produto e engatilha busca de metadados no catálogo."""
+    gtin_limpo = re.sub(r"\D", "", dados.gtin)
+    if not gtin_limpo or not sanidade.digito_gtin_confere(gtin_limpo):
+        raise HTTPException(400, "código de barras inválido (dígito verificador incorreto)")
+
+    con = request.app.state.con
+    prod = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    if not prod:
+        raise HTTPException(404, "produto não encontrado")
+
+    with con:
+        con.execute(
+            "UPDATE produto "
+            "SET gtin = ?, gtin_buscado_em = datetime('now','localtime') "
+            "WHERE id = ?",
+            (gtin_limpo, produto_id),
+        )
+
+    # Enriquece via catálogo local/online imediatamente
+    enriquecimento.enriquecer_local(con, produto_id)
+    prod_atualizado = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    return responder({"ok": True, "produto": dict(prod_atualizado)})
 
 
 @app.post("/api/enriquecer/local")

@@ -11,6 +11,9 @@ import json
 import logging
 import re
 import sqlite3
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from .config import config
@@ -74,7 +77,36 @@ def normalizar_gtin(gtin: str) -> str:
     return re.sub(r"\D", "", gtin or "")
 
 
-def buscar_por_gtin(con: sqlite3.Connection, gtin: str) -> dict | None:
+def consultar_openfoodfacts_api(gtin: str, timeout: int = 5) -> dict | None:
+    """Consulta o Open Food Facts online para um GTIN e devolve dicionário padronizado."""
+    cod = normalizar_gtin(gtin)
+    if not cod or not digito_gtin_confere(cod):
+        return None
+    url = f"https://world.openfoodfacts.org/api/v2/product/{cod}.json"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Cupomzinho - App Domestica "
+                "(https://github.com/ThalassicRaysOfTheAphoticSunset/cupomzinho)"
+            )
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.load(resp)
+            if data.get("status") == 1 and "product" in data:
+                prod = data["product"]
+                prod["code"] = prod.get("code") or cod
+                return parse_openfoodfacts_dict(prod)
+    except Exception as erro:
+        log.debug("Consulta ao OFF para %s falhou: %s", cod, erro)
+    return None
+
+
+def buscar_por_gtin(
+    con: sqlite3.Connection, gtin: str, consultar_online_se_faltar: bool = False
+) -> dict | None:
     """Busca produto no catálogo pelo GTIN/EAN, tratando variações de zeros."""
     cod = normalizar_gtin(gtin)
     if not cod:
@@ -93,7 +125,19 @@ def buscar_por_gtin(con: sqlite3.Connection, gtin: str) -> dict | None:
         candidatos,
     ).fetchone()
 
-    return dict(r) if r else None
+    if r:
+        return dict(r)
+
+    if consultar_online_se_faltar:
+        item = consultar_openfoodfacts_api(cod)
+        if item:
+            try:
+                inserir_produtos(con, [item])
+            except Exception:
+                pass
+            return item
+
+    return None
 
 
 def buscar_por_termo(con: sqlite3.Connection, termo: str, limite: int = 10) -> list[dict]:
@@ -386,6 +430,67 @@ def estatisticas_catalogo(con: sqlite3.Connection) -> dict:
     }
 
 
+def sincronizar_gtins_existentes(
+    con_principal: sqlite3.Connection,
+    con_catalogo: sqlite3.Connection | None = None,
+    limite: int = 100,
+) -> dict:
+    """Sincroniza produtos que já têm GTIN com dados do catálogo satélite / Open Food Facts.
+
+    Atualiza catalogo.db e enriquece a tabela produto (marca, nutriscore, nova_group, foto_url).
+    """
+    cat = con_catalogo if con_catalogo is not None else conectar_catalogo(criar=True)
+    if not cat:
+        return {"atualizados": 0, "total": 0}
+
+    # Busca produtos com GTIN que ainda não têm dados nutricionais/marca
+    prods = con_principal.execute(
+        """
+        SELECT id, descricao_canonica, gtin FROM produto
+        WHERE gtin IS NOT NULL AND (nutriscore IS NULL AND nova_group IS NULL AND marca IS NULL)
+        LIMIT ?
+        """,
+        (limite,),
+    ).fetchall()
+
+    atualizados = 0
+    for p in prods:
+        pid = p["id"]
+        gtin = p["gtin"]
+        info = buscar_por_gtin(cat, gtin, consultar_online_se_faltar=True)
+        if info:
+            with con_principal:
+                con_principal.execute(
+                    """
+                    UPDATE produto
+                    SET marca = COALESCE(marca, ?),
+                        nutriscore = COALESCE(nutriscore, ?),
+                        nova_group = COALESCE(nova_group, ?),
+                        foto_url = COALESCE(foto_url, ?)
+                    WHERE id = ?
+                    """,
+                    (
+                        info.get("marca"),
+                        info.get("nutriscore"),
+                        info.get("nova_group"),
+                        info.get("foto_url"),
+                        pid,
+                    ),
+                )
+            atualizados += 1
+            log.info(
+                "Produto %s (%s) enriquecido via catálogo: Nutri=%s, NOVA=%s, Marca=%s",
+                pid,
+                p["descricao_canonica"],
+                info.get("nutriscore"),
+                info.get("nova_group"),
+                info.get("marca"),
+            )
+            time.sleep(0.3)
+
+    return {"atualizados": atualizados, "total": len(prods)}
+
+
 def main():
     """CLI para gestão e ingestão de dumps no catálogo satélite."""
     import argparse
@@ -406,6 +511,14 @@ def main():
     p_buscar = sub.add_parser("buscar", help="Busca produto por GTIN ou termo")
     p_buscar.add_argument("termo", help="GTIN ou texto")
 
+    p_sync = sub.add_parser(
+        "sincronizar-gtins",
+        help="Sincroniza produtos com GTIN do banco principal contra o catálogo/OFF",
+    )
+    p_sync.add_argument(
+        "--limite", type=int, default=100, help="Limite de produtos a processar"
+    )
+
     sub.add_parser("status", help="Exibe estatísticas do catálogo")
 
     args = parser.parse_args()
@@ -420,7 +533,7 @@ def main():
         proc, ins = ingestar_cmed_csv(con, args.arquivo, delimitador=args.delimitador)
         print(f"Concluído: {proc} linhas processadas, {ins} medicamentos inseridos.")
     elif args.comando == "buscar":
-        achado = buscar_por_gtin(con, args.termo)
+        achado = buscar_por_gtin(con, args.termo, consultar_online_se_faltar=True)
         if achado:
             print("Encontrado por GTIN:", achado)
         else:
@@ -429,6 +542,13 @@ def main():
             for t in termos:
                 marca_str = t.get("marca") or "s/ marca"
                 print(f"  [{t['gtin']}] {t['nome']} ({marca_str}) - NOVA: {t.get('nova_group')}")
+    elif args.comando == "sincronizar-gtins":
+        from .banco import conectar as conectar_principal
+
+        con_p = conectar_principal()
+        res = sincronizar_gtins_existentes(con_p, con, limite=args.limite)
+        print(f"Sincronização concluída: {res['atualizados']} de {res['total']} atualizados.")
+        con_p.close()
     elif args.comando == "status":
         stats = estatisticas_catalogo(con)
         print("Status do Catálogo Satélite:")
