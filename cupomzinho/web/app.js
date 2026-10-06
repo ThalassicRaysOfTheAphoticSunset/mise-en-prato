@@ -140,16 +140,108 @@ $('#form-link').onsubmit = (ev) => {
    A imagem só é pedida quando alguém abre a gaveta: captcha tem validade curta,
    e buscar um a cada carregamento da tela seria incomodar o portal à toa. */
 let desafioAberto = null;
+let timerDesafio = null;
+let segundosRestantesDesafio = 300;
+
+function calcularDVCliente(chave43) {
+  let soma = 0;
+  let peso = 2;
+  for (let i = chave43.length - 1; i >= 0; i--) {
+    soma += peso * Number(chave43[i]);
+    peso = peso === 9 ? 2 : peso + 1;
+  }
+  const resto = soma % 11;
+  return (resto === 0 || resto === 1) ? '0' : String(11 - resto);
+}
+
+function validarChaveCliente(chave) {
+  const digitos = chave.replace(/\D/g, '');
+  if (digitos.length !== 44) return false;
+  return digitos[43] === calcularDVCliente(digitos.slice(0, 43));
+}
+
+function atualizarStatusChave() {
+  const input = $('#chave');
+  const statusEl = $('#chave-status');
+  const btnSubmit = $('#btn-submit-chave');
+  if (!input || !statusEl) return;
+
+  const digitos = input.value.replace(/\D/g, '').slice(0, 44);
+  const blocos = digitos.match(/.{1,4}/g)?.join(' ') || '';
+  if (input.value !== blocos) {
+    input.value = blocos;
+  }
+
+  if (digitos.length === 0) {
+    statusEl.textContent = '';
+    if (btnSubmit) btnSubmit.disabled = false;
+    return;
+  }
+
+  if (digitos.length < 44) {
+    statusEl.style.color = 'var(--fraca)';
+    statusEl.textContent = `${digitos.length} de 44 dígitos digitados`;
+    if (btnSubmit) btnSubmit.disabled = true;
+    return;
+  }
+
+  const dvCalculado = calcularDVCliente(digitos.slice(0, 43));
+  if (digitos[43] === dvCalculado) {
+    statusEl.style.color = 'var(--verde)';
+    statusEl.textContent = '✓ Dígito verificador válido!';
+    if (btnSubmit) btnSubmit.disabled = false;
+  } else {
+    statusEl.style.color = 'var(--alerta)';
+    statusEl.textContent = `⚠️ Dígito verificador incorreto (esperado ${dvCalculado}, digitado ${digitos[43]}). Confira o número no cupom.`;
+    if (btnSubmit) btnSubmit.disabled = true;
+  }
+}
+
+const inputChave = $('#chave');
+if (inputChave) {
+  inputChave.oninput = atualizarStatusChave;
+}
+
+function iniciarTimerDesafio() {
+  clearInterval(timerDesafio);
+  segundosRestantesDesafio = 300;
+  const timerEl = $('#captcha-timer');
+
+  const atualizarVisor = () => {
+    if (!timerEl) return;
+    const min = String(Math.floor(segundosRestantesDesafio / 60)).padStart(2, '0');
+    const seg = String(segundosRestantesDesafio % 60).padStart(2, '0');
+    timerEl.textContent = `⏱️ Válido por ${min}:${seg}`;
+    timerEl.style.color = segundosRestantesDesafio <= 30 ? 'var(--alerta)' : 'var(--fraca)';
+  };
+
+  atualizarVisor();
+  timerDesafio = setInterval(() => {
+    segundosRestantesDesafio -= 1;
+    if (segundosRestantesDesafio <= 0) {
+      clearInterval(timerDesafio);
+      aviso('Desafio expirado no portal. Gerando nova imagem…', true);
+      abrirDesafio();
+    } else {
+      atualizarVisor();
+    }
+  }, 1000);
+}
 
 async function abrirDesafio() {
   $('#captcha-caixa').hidden = false;
-  $('#captcha-img').removeAttribute('src');
+  const img = $('#captcha-img');
+  img.removeAttribute('src');
+  img.classList.remove('ampliado');
   $('#captcha').value = '';
   desafioAberto = null;
+  clearInterval(timerDesafio);
   try {
     const { desafio, imagem } = await api('/api/chave/desafio');
     desafioAberto = desafio;
-    $('#captcha-img').src = imagem;
+    img.src = imagem;
+    iniciarTimerDesafio();
+    setTimeout(() => { $('#captcha')?.focus(); }, 80);
   } catch (erro) {
     aviso(erro.message, true);
   }
@@ -162,26 +254,33 @@ $('#captcha-outro').onclick = abrirDesafio;
 
 $('#form-chave').onsubmit = async (ev) => {
   ev.preventDefault();
+  const digitos = $('#chave').value.replace(/\D/g, '');
+  if (digitos.length !== 44 || !validarChaveCliente(digitos)) {
+    aviso('Chave de 44 dígitos inválida. Confira o dígito verificador.', true);
+    return;
+  }
+
   if (!desafioAberto) {
     await abrirDesafio();
     aviso('Leia as letras da imagem e mande de novo.');
     return;
   }
   const corpo = {
-    chave: $('#chave').value.trim(),
+    chave: digitos,
     desafio: desafioAberto,
-    captcha: $('#captcha').value.trim(),
+    captcha: $('#captcha').value.trim().toUpperCase(),
   };
-  /* O captcha vale uma vez só: usado, certo ou errado, não volta. Por isso a
-     imagem é trocada em qualquer desfecho, e não só quando as letras erram. */
+
   const deuCerto = await enviar(
     api('/api/cupom/chave', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(corpo),
     }), 'Consultando o portal pela chave…');
   desafioAberto = null;
+  clearInterval(timerDesafio);
   if (deuCerto) {
     $('#chave').value = '';
+    $('#chave-status').textContent = '';
     $('#captcha-caixa').hidden = true;
   } else {
     abrirDesafio();

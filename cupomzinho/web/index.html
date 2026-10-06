@@ -53,15 +53,22 @@
         prova que tem gente deste lado, e não um robô.</p>
       <form id="form-chave">
         <input id="chave" type="text" inputmode="numeric" autocomplete="off"
-               placeholder="4126 0877 7522 9301 6191 …" required>
-        <div id="captcha-caixa" hidden>
-          <img id="captcha-img" alt="as letras que o portal da Fazenda está pedindo"
-               width="180" height="60">
-          <button type="button" id="captcha-outro" class="acao">outra imagem</button>
+               placeholder="4126 0877 7522 9301 6191 …" required maxlength="54">
+        <div id="chave-status" style="font-size:.82rem;margin-top:.3rem"></div>
+        <div id="captcha-caixa" hidden style="margin-top:.8rem">
+          <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+            <img id="captcha-img" alt="as letras que o portal da Fazenda está pedindo"
+                 width="180" height="60" title="Toque para ampliar 1.5x"
+                 onclick="this.classList.toggle('ampliado')">
+            <button type="button" id="captcha-outro" class="acao">outra imagem</button>
+            <span id="captcha-timer" class="fraca" style="font-size:.82rem"></span>
+          </div>
           <input id="captcha" type="text" inputmode="text" autocomplete="off"
+                 autocapitalize="characters" autocorrect="off" spellcheck="false"
+                 style="text-transform:uppercase;margin-top:.5rem"
                  placeholder="as letras da imagem" required>
         </div>
-        <button type="submit">Consultar pela chave</button>
+        <button type="submit" id="btn-submit-chave" style="margin-top:.8rem">Consultar pela chave</button>
       </form>
 
       <details class="alternativa">

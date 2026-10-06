@@ -253,4 +253,16 @@ svg.grafico text { fill: var(--fraca); font-size: 10px; }
   cursor: pointer; font-size: 1.15rem; padding: 0 .4rem; line-height: 1;
 }
 
+/* ── zoom de captcha e status de chave ───────────────────────────────────── */
+#captcha-img {
+  cursor: zoom-in; transition: transform .18s ease-out;
+  border-radius: 6px; border: 1px solid var(--borda);
+}
+#captcha-img.ampliado {
+  transform: scale(1.5); transform-origin: left center;
+  box-shadow: 0 4px 16px rgba(0,0,0,.35); z-index: 10;
+  position: relative; cursor: zoom-out;
+}
+
+
 
