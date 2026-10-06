@@ -429,6 +429,38 @@ svg.grafico-historico {
   border-radius: 10px; padding: .6rem .9rem; font: inherit; font-weight: 600; cursor: pointer;
 }
 
+.grade-variantes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: .6rem;
+  margin-top: .6rem;
+}
+.cartao-variante {
+  background: var(--painel);
+  border: 1px solid var(--borda);
+  border-radius: 10px;
+  padding: .6rem;
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+}
+.cartao-variante.eh-padrao {
+  border-color: var(--verde);
+  background: rgba(74, 222, 128, 0.03);
+}
+.variante-cabecalho {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+}
+.variante-acoes {
+  display: flex;
+  gap: .4rem;
+  margin-top: auto;
+  align-items: center;
+  justify-content: space-between;
+}
+
 
 
 

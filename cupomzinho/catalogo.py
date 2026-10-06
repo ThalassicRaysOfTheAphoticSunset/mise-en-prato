@@ -491,6 +491,250 @@ def sincronizar_gtins_existentes(
     return {"atualizados": atualizados, "total": len(prods)}
 
 
+def extrair_sabor(nome: str, marca: str | None = None) -> str:
+    """Tenta inferir o sabor/variante a partir do nome comercial."""
+    if not nome:
+        return ""
+    texto = nome
+    if marca:
+        padrao_marca = re.escape(marca)
+        texto = re.sub(rf"\b{padrao_marca}\b", "", texto, flags=re.IGNORECASE)
+
+    genericos = [
+        r"\bbebida\s+l[aá]ctea\b",
+        r"\biogurte\b",
+        r"\bprote[íi]nas?\b",
+        r"\buht\b",
+        r"\bfrasco\b",
+        r"\bgarrafa\b",
+        r"\blata\b",
+        r"\bpet\b",
+        r"\bpack\b",
+        r"\bpct\b",
+        r"\bchocolatado\b",
+        r"\brefrigerante\b",
+        r"\bsuco\b",
+        r"\bcerveja\b",
+        r"\bbarra\s+de\s+cereal\b",
+        r"\bpicol[eé]\b",
+        r"\bsorvete\b",
+        r"\bsabor\b",
+        r"\bde\b",
+        r"\d+([.,]\d+)?\s*(g|gr|kg|ml|l|lt|un)\b",
+    ]
+    for g in genericos:
+        texto = re.sub(g, "", texto, flags=re.IGNORECASE)
+    sabor = re.sub(r"[-–—/,\.]", " ", texto).strip()
+    sabor = re.sub(r"\s+", " ", sabor).strip()
+    return sabor.title() if sabor else ""
+
+
+def listar_variantes(con_principal: sqlite3.Connection, produto_id: int) -> list[dict]:
+    """Retorna todas as variantes cadastradas para um produto."""
+    try:
+        linhas = con_principal.execute(
+            """
+            SELECT gtin, produto_id, nome, sabor, marca, nutriscore, nova_group, foto_url,
+                   eh_padrao, origem, criado_em
+              FROM produto_variante
+             WHERE produto_id = ?
+             ORDER BY eh_padrao DESC, sabor, nome
+            """,
+            (produto_id,),
+        ).fetchall()
+        return [dict(r) for r in linhas]
+    except sqlite3.OperationalError:
+        return []
+
+
+def salvar_variantes_do_produto(
+    con_principal: sqlite3.Connection,
+    produto_id: int,
+    variantes: list[dict],
+    gtin_padrao: str | None = None,
+    con_catalogo: sqlite3.Connection | None = None,
+) -> int:
+    """Salva uma ou mais variantes para o produto pai e sincroniza metadados."""
+    if not variantes:
+        return 0
+
+    cat = con_catalogo if con_catalogo is not None else conectar_catalogo(somente_leitura=True)
+    inseridos = 0
+    gtins_processados = []
+
+    for v in variantes:
+        gtin = normalizar_gtin(v.get("gtin") or "")
+        if not gtin or not digito_gtin_confere(gtin):
+            continue
+
+        info_cat = buscar_por_gtin(cat, gtin) if cat else None
+        nome = v.get("nome") or (info_cat.get("nome") if info_cat else "") or "Variante"
+        marca = v.get("marca") or (info_cat.get("marca") if info_cat else None)
+        nutriscore = v.get("nutriscore") or (info_cat.get("nutriscore") if info_cat else None)
+        nova_group = (
+            v.get("nova_group")
+            if v.get("nova_group") is not None
+            else (info_cat.get("nova_group") if info_cat else None)
+        )
+        foto_url = v.get("foto_url") or (info_cat.get("foto_url") if info_cat else None)
+        sabor = v.get("sabor") or extrair_sabor(nome, marca)
+
+        eh_pad = 1 if (gtin_padrao and gtin == gtin_padrao) or v.get("eh_padrao") else 0
+
+        with con_principal:
+            con_principal.execute(
+                """
+                INSERT INTO produto_variante (
+                    produto_id, gtin, nome, sabor, marca, nutriscore,
+                    nova_group, foto_url, eh_padrao, origem, criado_em
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                ON CONFLICT(produto_id, gtin) DO UPDATE SET
+                    nome = excluded.nome,
+                    sabor = COALESCE(excluded.sabor, produto_variante.sabor),
+                    marca = COALESCE(excluded.marca, produto_variante.marca),
+                    nutriscore = COALESCE(excluded.nutriscore, produto_variante.nutriscore),
+                    nova_group = COALESCE(excluded.nova_group, produto_variante.nova_group),
+                    foto_url = COALESCE(excluded.foto_url, produto_variante.foto_url),
+                    eh_padrao = CASE WHEN excluded.eh_padrao = 1
+                                     THEN 1 ELSE produto_variante.eh_padrao END
+                """,
+                (
+                    produto_id,
+                    gtin,
+                    nome.strip(),
+                    sabor.strip() if sabor else None,
+                    marca.strip() if marca else None,
+                    nutriscore,
+                    nova_group,
+                    foto_url,
+                    eh_pad,
+                    v.get("origem", "catalogo"),
+                ),
+            )
+        inseridos += 1
+        gtins_processados.append(gtin)
+
+    if not gtins_processados:
+        return 0
+
+    tem_padrao = con_principal.execute(
+        "SELECT 1 FROM produto_variante WHERE produto_id = ? AND eh_padrao = 1", (produto_id,)
+    ).fetchone()
+    if not tem_padrao:
+        primeiro_gtin = gtins_processados[0]
+        with con_principal:
+            con_principal.execute(
+                "UPDATE produto_variante SET eh_padrao = 1 WHERE produto_id = ? AND gtin = ?",
+                (produto_id, primeiro_gtin),
+            )
+
+    var_pad = con_principal.execute(
+        """
+        SELECT * FROM produto_variante 
+         WHERE produto_id = ? 
+         ORDER BY eh_padrao DESC, gtin LIMIT 1
+        """,
+        (produto_id,),
+    ).fetchone()
+    if var_pad:
+        with con_principal:
+            con_principal.execute(
+                """
+                UPDATE produto
+                   SET gtin = ?,
+                       marca = COALESCE(marca, ?),
+                       nutriscore = COALESCE(nutriscore, ?),
+                       nova_group = COALESCE(nova_group, ?),
+                       foto_url = COALESCE(foto_url, ?)
+                 WHERE id = ?
+                """,
+                (
+                    var_pad["gtin"],
+                    var_pad["marca"],
+                    var_pad["nutriscore"],
+                    var_pad["nova_group"],
+                    var_pad["foto_url"],
+                    produto_id,
+                ),
+            )
+
+    return inseridos
+
+
+def definir_variante_padrao(
+    con_principal: sqlite3.Connection, produto_id: int, gtin: str
+) -> bool:
+    """Define uma variante específica como a padrão da linha."""
+    cod = normalizar_gtin(gtin)
+    var = con_principal.execute(
+        "SELECT * FROM produto_variante WHERE produto_id = ? AND gtin = ?",
+        (produto_id, cod),
+    ).fetchone()
+    if not var:
+        return False
+
+    with con_principal:
+        con_principal.execute(
+            "UPDATE produto_variante SET eh_padrao = 0 WHERE produto_id = ?",
+            (produto_id,),
+        )
+        con_principal.execute(
+            "UPDATE produto_variante SET eh_padrao = 1 WHERE produto_id = ? AND gtin = ?",
+            (produto_id, cod),
+        )
+        con_principal.execute(
+            """
+            UPDATE produto
+               SET gtin = ?,
+                   marca = COALESCE(?, marca),
+                   nutriscore = COALESCE(?, nutriscore),
+                   nova_group = COALESCE(?, nova_group),
+                   foto_url = COALESCE(?, foto_url)
+             WHERE id = ?
+            """,
+            (
+                cod,
+                var["marca"],
+                var["nutriscore"],
+                var["nova_group"],
+                var["foto_url"],
+                produto_id,
+            ),
+        )
+    return True
+
+
+def remover_variante(
+    con_principal: sqlite3.Connection, produto_id: int, gtin: str
+) -> bool:
+    """Remove uma variante do produto. Se for a padrão, promove outra."""
+    cod = normalizar_gtin(gtin)
+    with con_principal:
+        con_principal.execute(
+            "DELETE FROM produto_variante WHERE produto_id = ? AND gtin = ?",
+            (produto_id, cod),
+        )
+        restante = con_principal.execute(
+            "SELECT * FROM produto_variante WHERE produto_id = ? ORDER BY eh_padrao DESC LIMIT 1",
+            (produto_id,),
+        ).fetchone()
+        if restante:
+            con_principal.execute(
+                "UPDATE produto_variante SET eh_padrao = 1 WHERE produto_id = ? AND gtin = ?",
+                (produto_id, restante["gtin"]),
+            )
+            con_principal.execute(
+                "UPDATE produto SET gtin = ? WHERE id = ?",
+                (restante["gtin"], produto_id),
+            )
+        else:
+            con_principal.execute(
+                "UPDATE produto SET gtin = NULL WHERE id = ?",
+                (produto_id,),
+            )
+    return True
+
+
 def main():
     """CLI para gestão e ingestão de dumps no catálogo satélite."""
     import argparse

@@ -915,7 +915,38 @@ window.verProduto = async (id) => {
         <span class="num">${dinheiro(p.mediana_paga)}</span></div>
       <div class="linha"><span class="fraca">maior pago</span>
         <span class="num">${dinheiro(p.maior_pago)}</span></div>
-      ${!p.gtin && !p.is_granel ? `
+      ${p.variantes && p.variantes.length ? `
+        <h2>Sabores e Variantes (${p.variantes.length})</h2>
+        <div class="grade-variantes">
+          ${p.variantes.map(v => `
+            <div class="cartao-variante ${v.eh_padrao ? 'eh-padrao' : ''}">
+              <div class="variante-cabecalho">
+                ${v.foto_url ? `<img src="${v.foto_url}" class="produto-thumb" alt="${v.sabor || v.nome}" loading="lazy">` : ''}
+                <div style="flex:1;min-width:0">
+                  <div style="font-weight:600;font-size:.92rem;line-height:1.2">${v.sabor || v.nome}</div>
+                  <div class="fraca" style="font-family:monospace;font-size:.78rem">${v.gtin}</div>
+                </div>
+              </div>
+              <div style="display:flex;gap:.3rem;align-items:center;flex-wrap:wrap;margin:.2rem 0">
+                ${v.eh_padrao ? '<span class="selo" style="background:var(--verde);color:#06110a;font-weight:600">Padrão</span>' : ''}
+                ${v.nutriscore ? `<span class="badge-nutri nutri-${v.nutriscore.toLowerCase()}">${v.nutriscore}</span>` : ''}
+                ${v.nova_group ? `<span class="badge-nova nova-${v.nova_group}">NOVA ${v.nova_group}</span>` : ''}
+              </div>
+              <div class="variante-acoes">
+                ${!v.eh_padrao ? `<button class="btn-secundario" style="padding:.2rem .5rem;font-size:.78rem" onclick="definirVariantePadrao(${p.id}, '${v.gtin}')">★ Tornar padrão</button>` : '<span></span>'}
+                <button class="btn-secundario" style="padding:.2rem .5rem;font-size:.78rem;color:var(--alerta)" onclick="removerVariante(${p.id}, '${v.gtin}')" title="Desvincular sabor">Remover</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <div style="margin-top:.6rem;display:flex;gap:.5rem;flex-wrap:wrap">
+          <button class="btn-secundario" onclick="mostrarInputNovoSabor(${p.id})">+ Adicionar sabor à linha</button>
+          <button class="btn-secundario" onclick="buscarCandidatosGtin(${p.id})">Buscar mais sabores (Menor Preço)</button>
+        </div>
+        <div id="painel-candidatos-${p.id}" style="margin-top:.6rem"></div>
+        <div id="painel-novo-sabor-${p.id}" style="margin-top:.4rem"></div>
+      ` : ''}
+      ${!p.gtin && !p.is_granel && (!p.variantes || !p.variantes.length) ? `
         <div class="cartao" style="margin-top:.8rem;border-left:3px solid var(--laranja,#f59e0b);background:rgba(245,158,11,0.04)">
           <div class="linha">
             <strong>Código de barras não associado</strong>
@@ -940,7 +971,8 @@ window.verProduto = async (id) => {
 };
 
 window.buscarCandidatosGtin = async (id) => {
-  const painel = $(`#painel-candidatos-${id}`);
+  const painel = $(`#painel-candidatos-${id}`) || $(`#painel-novo-sabor-${id}`);
+  if (!painel) return;
   painel.innerHTML = '<div class="estado">Consultando candidatos…</div>';
   try {
     const { candidatos } = await api(`/api/produto/${id}/candidatos`);
@@ -949,19 +981,111 @@ window.buscarCandidatosGtin = async (id) => {
       return;
     }
     painel.innerHTML = `
-      <div class="fraca" style="margin-bottom:.4rem">Selecione o produto correspondente:</div>
-      ${candidatos.map((c) => `
-        <div class="linha" style="margin-bottom:.4rem;padding:.5rem;background:var(--painel);border:1px solid var(--borda);border-radius:6px">
+      <div class="fraca" style="margin-bottom:.4rem">Selecione os sabores/produtos correspondentes:</div>
+      <div style="margin-bottom:.6rem;display:flex;gap:.5rem;flex-wrap:wrap">
+        <button class="acao" onclick="salvarVariantesSelecionadas(${id})">Salvar como Linha Multissabor</button>
+        <button class="btn-secundario" onclick="selecionarTodosCandidatos(${id}, true)">Marcar todos</button>
+        <button class="btn-secundario" onclick="selecionarTodosCandidatos(${id}, false)">Desmarcar</button>
+      </div>
+      ${candidatos.map((c, idx) => `
+        <div class="linha" style="margin-bottom:.4rem;padding:.5rem;background:var(--painel);border:1px solid var(--borda);border-radius:6px;align-items:center">
+          <input type="checkbox" id="check-cand-${id}-${idx}" class="check-cand-${id}" value="${c.gtin}" data-nome="${c.descricao}" data-marca="${c.loja || ''}" style="width:auto;margin-right:.5rem" checked>
           <div style="flex:1">
             <div><strong style="font-family:monospace">${c.gtin}</strong> · ${c.descricao}</div>
             <div class="fraca">${c.preco ? dinheiro(c.preco) : ''} ${c.loja ? `· ${c.loja}` : ''}</div>
           </div>
-          <button class="acao" onclick="atribuirGtin(${id}, '${c.gtin}')">Usar este</button>
+          <button class="btn-secundario" style="padding:.3rem .6rem" onclick="atribuirGtin(${id}, '${c.gtin}')">Usar só este</button>
         </div>
       `).join('')}
     `;
   } catch (err) {
     painel.innerHTML = `<div class="estado ruim">${err.message}</div>`;
+  }
+};
+
+window.selecionarTodosCandidatos = (id, marcar) => {
+  document.querySelectorAll(`.check-cand-${id}`).forEach((cb) => (cb.checked = marcar));
+};
+
+window.salvarVariantesSelecionadas = async (id) => {
+  const marcados = Array.from(document.querySelectorAll(`.check-cand-${id}:checked`));
+  if (!marcados.length) {
+    alert('Selecione pelo menos um sabor/código.');
+    return;
+  }
+  const variantes = marcados.map((cb, idx) => ({
+    gtin: cb.value,
+    nome: cb.getAttribute('data-nome') || '',
+    marca: cb.getAttribute('data-marca') || null,
+    eh_padrao: idx === 0,
+  }));
+  const painel = $(`#painel-candidatos-${id}`) || $(`#painel-novo-sabor-${id}`);
+  if (painel) painel.innerHTML = '<div class="estado">Salvando sabores e buscando dados nutricionais…</div>';
+  try {
+    await api(`/api/produto/${id}/variantes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ variantes, gtin_padrao: variantes[0].gtin }),
+    });
+    verProduto(id);
+    carregadores.produtos();
+  } catch (err) {
+    if (painel) painel.innerHTML = `<div class="estado ruim">${err.message}</div>`;
+  }
+};
+
+window.mostrarInputNovoSabor = (id) => {
+  const painel = $(`#painel-novo-sabor-${id}`);
+  if (!painel) return;
+  painel.innerHTML = `
+    <div style="display:flex;gap:.5rem;margin-top:.4rem;align-items:center;background:var(--painel);padding:.6rem;border-radius:8px;border:1px solid var(--borda);flex-wrap:wrap">
+      <input type="text" id="input-sabor-nome-${id}" placeholder="Nome do sabor (ex: Chocolate)" style="flex:1;min-width:8rem;padding:.4rem">
+      <input type="text" id="input-sabor-gtin-${id}" placeholder="Código EAN/GTIN (ex: 789...)" style="flex:1;min-width:8rem;padding:.4rem;font-family:monospace">
+      <button class="acao" onclick="adicionarSaborAvulso(${id})">Salvar sabor</button>
+    </div>
+  `;
+};
+
+window.adicionarSaborAvulso = async (id) => {
+  const nome = ($(`#input-sabor-nome-${id}`)?.value || '').trim();
+  const gtin = ($(`#input-sabor-gtin-${id}`)?.value || '').trim();
+  if (!gtin) {
+    alert('Informe o código de barras da embalagem.');
+    return;
+  }
+  try {
+    await api(`/api/produto/${id}/variantes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        variantes: [{ gtin, nome: nome || 'Variante', sabor: nome || null }],
+      }),
+    });
+    verProduto(id);
+    carregadores.produtos();
+  } catch (err) {
+    alert(err.message);
+  }
+};
+
+window.definirVariantePadrao = async (produtoId, gtin) => {
+  try {
+    await api(`/api/produto/${produtoId}/variante/${gtin}/padrao`, { method: 'POST' });
+    verProduto(produtoId);
+    carregadores.produtos();
+  } catch (err) {
+    alert(err.message);
+  }
+};
+
+window.removerVariante = async (produtoId, gtin) => {
+  if (!confirm(`Desvincular o código ${gtin} deste produto?`)) return;
+  try {
+    await api(`/api/produto/${produtoId}/variante/${gtin}`, { method: 'DELETE' });
+    verProduto(produtoId);
+    carregadores.produtos();
+  } catch (err) {
+    alert(err.message);
   }
 };
 

@@ -239,4 +239,13 @@ def historico_do_produto(con: sqlite3.Connection, produto_id: int) -> dict:
         "menor_pago": pagos[0] if pagos else None,
         "maior_pago": pagos[-1] if pagos else None,
         "serie": serie, "compras": compras,
+        "variantes": _variantes_do_produto(con, produto_id),
     }
+
+
+def _variantes_do_produto(con: sqlite3.Connection, produto_id: int) -> list[dict]:
+    try:
+        from .catalogo import listar_variantes
+        return listar_variantes(con, produto_id)
+    except Exception:
+        return []

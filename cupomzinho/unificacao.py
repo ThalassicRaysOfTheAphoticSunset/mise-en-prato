@@ -74,14 +74,32 @@ def candidatos(con: sqlite3.Connection) -> list[dict]:
     recusados = {(r["desc_a"], r["desc_b"])
                  for r in con.execute("SELECT desc_a, desc_b FROM unificacao_recusada")}
 
+    variantes_por_produto: dict[int, set[str]] = {}
+    try:
+        for r in con.execute("SELECT produto_id, gtin FROM produto_variante"):
+            variantes_por_produto.setdefault(r["produto_id"], set()).add(r["gtin"])
+    except sqlite3.OperationalError:
+        pass
+
     achados = []
     for k, a in enumerate(produtos):
         for b in produtos[k + 1:]:
             if tuple(sorted((a["desc"], b["desc"]))) in recusados:
                 continue
+
+            gtins_a = set(variantes_por_produto.get(a["id"], set()))
+            if a["gtin"]:
+                gtins_a.add(a["gtin"])
+            gtins_b = set(variantes_por_produto.get(b["id"], set()))
+            if b["gtin"]:
+                gtins_b.add(b["gtin"])
+
+            compartilhados = gtins_a.intersection(gtins_b)
             # Código de barras igual é prova, não indício — vem sempre primeiro.
             if a["gtin"] and a["gtin"] == b["gtin"]:
                 motivo, forca = "mesmo código de barras", 0
+            elif compartilhados:
+                motivo, forca = "compartilham código de barras de sabor/variante", 0
             else:
                 motivo = parecidos(a["desc"], b["desc"])
                 if not motivo:
@@ -109,6 +127,14 @@ def unificar(con: sqlite3.Connection, manter: int, juntar: int) -> dict:
         raise ValueError("produto não encontrado")
 
     with con:
+        # Move variantes de juntar para manter antes do DELETE (evita CASCADE apagar variantes)
+        try:
+            con.execute("UPDATE OR IGNORE produto_variante SET produto_id = ? WHERE produto_id = ?",
+                        (manter, juntar))
+            con.execute("DELETE FROM produto_variante WHERE produto_id = ?", (juntar,))
+        except sqlite3.OperationalError:
+            pass
+
         # OR IGNORE nos que têm índice único: a mesma observação de preço pode
         # já existir dos dois lados, e aí a cópia sobrando é descartada.
         con.execute("UPDATE item SET produto_id = ? WHERE produto_id = ?", (manter, juntar))
@@ -125,10 +151,29 @@ def unificar(con: sqlite3.Connection, manter: int, juntar: int) -> dict:
         # código de barras de um para o outro deixaria dois produtos com o
         # mesmo gtin no mesmo instante.
         con.execute("DELETE FROM produto WHERE id = ?", (juntar,))
-        for campo in ("gtin", "ncm", "categoria", "apelido"):
-            if not alvo[campo] and outro[campo]:
+        campos_heranca = (
+            "gtin", "ncm", "categoria", "apelido", "marca", "nutriscore", "nova_group", "foto_url"
+        )
+        for campo in campos_heranca:
+            if campo in alvo.keys() and not alvo[campo] and outro[campo]:
                 con.execute(f"UPDATE produto SET {campo} = ? WHERE id = ?",  # noqa: S608
                             (outro[campo], manter))
+
+        # Se manter não tinha GTIN mas agora tem variantes, define o padrão
+        try:
+            var_padrao = con.execute(
+                """
+                SELECT gtin FROM produto_variante
+                 WHERE produto_id = ?
+                 ORDER BY eh_padrao DESC LIMIT 1
+                """,
+                (manter,),
+            ).fetchone()
+            if var_padrao:
+                con.execute("UPDATE produto SET gtin = COALESCE(gtin, ?) WHERE id = ?",
+                            (var_padrao["gtin"], manter))
+        except sqlite3.OperationalError:
+            pass
 
     log.info("unificado: %r absorveu %r", alvo["descricao_canonica"],
              outro["descricao_canonica"])

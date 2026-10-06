@@ -459,3 +459,57 @@ def test_buscar_candidatos_e_definir_gtin_manual(cliente):
     assert dados_valido["produto"]["gtin"] == "7891167011779"
 
 
+def test_gerenciar_variantes_api(cliente):
+    res = cliente.get("/api/produtos")
+    assert res.status_code == 200
+    p = res.json()["produtos"][0]
+    pid = p["id"]
+
+    # 1. Salva duas variantes
+    dados_envio = {
+        "variantes": [
+            {
+                "gtin": "7896045102556",
+                "nome": "Bebida Láctea Cappuccino Classic 260ml",
+                "sabor": "Classic",
+                "marca": "3 Corações",
+                "eh_padrao": True,
+            },
+            {
+                "gtin": "7896045102563",
+                "nome": "Bebida Láctea Cappuccino Chocolate 260ml",
+                "sabor": "Chocolate",
+                "marca": "3 Corações",
+                "eh_padrao": False,
+            },
+        ],
+        "gtin_padrao": "7896045102556",
+    }
+    r_salvar = cliente.post(f"/api/produto/{pid}/variantes", json=dados_envio)
+    assert r_salvar.status_code == 200
+    res_salvar = r_salvar.json()
+    assert res_salvar["ok"] is True
+    assert res_salvar["inseridos"] == 2
+
+    # 2. Lista variantes via GET
+    r_listar = cliente.get(f"/api/produto/{pid}/variantes")
+    assert r_listar.status_code == 200
+    vars_listadas = r_listar.json()["variantes"]
+    assert len(vars_listadas) == 2
+    assert vars_listadas[0]["gtin"] == "7896045102556"
+    assert vars_listadas[0]["eh_padrao"] == 1
+
+    # 3. Altera a variante padrão
+    r_padrao = cliente.post(f"/api/produto/{pid}/variante/7896045102563/padrao")
+    assert r_padrao.status_code == 200
+    assert r_padrao.json()["ok"] is True
+    assert r_padrao.json()["produto"]["gtin"] == "7896045102563"
+
+    # 4. Remove uma variante
+    r_del = cliente.delete(f"/api/produto/{pid}/variante/7896045102556")
+    assert r_del.status_code == 200
+    r_depois = cliente.get(f"/api/produto/{pid}/variantes")
+    assert len(r_depois.json()["variantes"]) == 1
+
+
+

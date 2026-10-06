@@ -858,8 +858,87 @@ def definir_gtin_produto(produto_id: int, dados: DefinirGtin, request: Request, 
             (gtin_limpo, produto_id),
         )
 
+    # Registra também na tabela de variantes como padrão
+    catalogo.salvar_variantes_do_produto(
+        con, produto_id, [{"gtin": gtin_limpo, "eh_padrao": 1, "origem": "manual"}]
+    )
+
     # Enriquece via catálogo local/online imediatamente
     enriquecimento.enriquecer_local(con, produto_id)
+    prod_atualizado = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    return responder({"ok": True, "produto": dict(prod_atualizado)})
+
+
+class VarianteItem(BaseModel):
+    gtin: str
+    nome: str | None = None
+    sabor: str | None = None
+    marca: str | None = None
+    nutriscore: str | None = None
+    nova_group: int | None = None
+    foto_url: str | None = None
+    eh_padrao: bool = False
+
+
+class SalvarVariantes(BaseModel):
+    variantes: list[VarianteItem]
+    gtin_padrao: str | None = None
+
+
+@app.get("/api/produto/{produto_id}/variantes")
+def obter_variantes_produto(produto_id: int, request: Request, _: Morador):
+    """Lista as variantes e sabores registrados para um produto."""
+    con = request.app.state.con
+    prod = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    if not prod:
+        raise HTTPException(404, "produto não encontrado")
+    vars = catalogo.listar_variantes(con, produto_id)
+    return responder({"produto_id": produto_id, "variantes": vars})
+
+
+@app.post("/api/produto/{produto_id}/variantes")
+def salvar_variantes_produto(produto_id: int, dados: SalvarVariantes, request: Request, _: Morador):
+    """Associa uma lista de variantes/sabores a um produto pai."""
+    con = request.app.state.con
+    prod = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    if not prod:
+        raise HTTPException(404, "produto não encontrado")
+
+    vars_dict = [v.model_dump() for v in dados.variantes]
+    inseridos = catalogo.salvar_variantes_do_produto(
+        con, produto_id, vars_dict, gtin_padrao=dados.gtin_padrao
+    )
+    with con:
+        con.execute(
+            "UPDATE produto SET gtin_buscado_em = datetime('now','localtime') WHERE id = ?",
+            (produto_id,),
+        )
+    vars = catalogo.listar_variantes(con, produto_id)
+    prod_atualizado = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    return responder({
+        "ok": True,
+        "inseridos": inseridos,
+        "produto": dict(prod_atualizado),
+        "variantes": vars,
+    })
+
+
+@app.post("/api/produto/{produto_id}/variante/{gtin}/padrao")
+def definir_variante_padrao_produto(produto_id: int, gtin: str, request: Request, _: Morador):
+    """Define uma variante como a padrão da linha."""
+    con = request.app.state.con
+    sucesso = catalogo.definir_variante_padrao(con, produto_id, gtin)
+    if not sucesso:
+        raise HTTPException(404, "variante não encontrada para este produto")
+    prod_atualizado = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    return responder({"ok": True, "produto": dict(prod_atualizado)})
+
+
+@app.delete("/api/produto/{produto_id}/variante/{gtin}")
+def remover_variante_produto(produto_id: int, gtin: str, request: Request, _: Morador):
+    """Desvincula uma variante do produto."""
+    con = request.app.state.con
+    catalogo.remover_variante(con, produto_id, gtin)
     prod_atualizado = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
     return responder({"ok": True, "produto": dict(prod_atualizado)})
 

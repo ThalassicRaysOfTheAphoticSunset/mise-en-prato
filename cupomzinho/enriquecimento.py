@@ -325,6 +325,7 @@ def pendentes(con: sqlite3.Connection, limite: int = 50) -> list[dict]:
 
     Produtos a granel (is_granel = 1) nunca são incluídos: cebola e carnes a peso
     nunca terão GTIN comercial, e perguntar à CELEPAR sobre eles seria queimar a cota.
+    Produtos com variantes cadastradas em produto_variante também não são pendentes.
     """
     return [
         {
@@ -339,6 +340,7 @@ def pendentes(con: sqlite3.Connection, limite: int = 50) -> list[dict]:
                    COUNT(DISTINCT i.chave) AS compras
               FROM produto p JOIN item i ON i.produto_id = p.id
              WHERE p.gtin IS NULL AND p.is_granel = 0
+               AND NOT EXISTS (SELECT 1 FROM produto_variante pv WHERE pv.produto_id = p.id)
              GROUP BY p.id
              ORDER BY (p.gtin_buscado_em IS NOT NULL), p.gtin_buscado_em,
                       compras DESC, p.descricao_canonica
