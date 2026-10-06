@@ -307,3 +307,93 @@ def recentes(con: sqlite3.Connection, limite: int = 20) -> list[dict]:
 def total_conferido(cupom: Cupom) -> Decimal:
     """Soma dos itens menos o desconto — o número que tem de bater com o pago."""
     return sum((i.valor_total for i in cupom.itens), Decimal("0")) - cupom.desconto
+
+
+def revisar(con: sqlite3.Connection, chave: str, novos_itens: list[dict], *,
+            total: Decimal | None = None, desconto: Decimal | None = None,
+            valor_pago: Decimal | None = None, aprovar: bool = False) -> bool:
+    """Atualiza itens e valores de um cupom em revisão, permitindo aprovação humana."""
+    linha = con.execute("SELECT * FROM cupom WHERE chave = ?", (chave,)).fetchone()
+    if not linha:
+        return False
+
+    itens_parseados = []
+    seq = 1
+    for it in novos_itens:
+        desc = it.get("descricao", "").strip()
+        if not desc:
+            continue
+        qtd = Decimal(str(it.get("quantidade", 1)))
+        unit = Decimal(str(it.get("valor_unitario", 0)))
+        tot = Decimal(str(it.get("valor_total", (qtd * unit).quantize(Decimal("0.01")))))
+        unidade = (it.get("unidade") or "UN").strip().upper()
+        codigo_loja = str(it.get("codigo_loja") or "")
+        itens_parseados.append({
+            "seq": seq, "descricao": desc, "quantidade": qtd, "unidade": unidade,
+            "valor_unitario": unit, "valor_total": tot, "codigo_loja": codigo_loja,
+            "gtin": it.get("gtin"), "ncm": it.get("ncm")
+        })
+        seq += 1
+
+    soma_itens = sum((it["valor_total"] for it in itens_parseados), Decimal("0"))
+    desc = desconto if desconto is not None else (reais(linha["desconto_centavos"]) or Decimal("0"))
+    tot_efetivo = total if total is not None else (soma_itens if itens_parseados else Decimal("0"))
+    pago_efetivo = valor_pago if valor_pago is not None else (tot_efetivo - desc)
+
+    avisos = []
+    if not itens_parseados:
+        avisos.append("Cupom sem itens")
+    else:
+        diferenca = abs((soma_itens - desc) - pago_efetivo)
+        if diferenca > Decimal("0.02"):
+            avisos.append(
+                f"Divergência de centavos: soma dos itens (R$ {soma_itens}) - "
+                f"desconto (R$ {desc}) != pago (R$ {pago_efetivo})"
+            )
+
+    if aprovar:
+        completo = 1
+        avisos = []
+    else:
+        completo = 1 if not avisos else 0
+
+    with con:
+        con.execute("DELETE FROM item WHERE chave = ?", (chave,))
+        for it in itens_parseados:
+            produto_id = _produto_de(
+                con, linha["cnpj"], it["descricao"],
+                unidade=it["unidade"], quantidade=it["quantidade"], codigo_loja=it["codigo_loja"]
+            )
+            con.execute(
+                """INSERT INTO item (chave, seq, descricao, codigo_loja, unidade,
+                                     quantidade_milesimos, unitario_centavos, total_centavos,
+                                     produto_id)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (chave, it["seq"], it["descricao"], it["codigo_loja"], it["unidade"],
+                 milesimos(it["quantidade"]), centavos(it["valor_unitario"]),
+                 centavos(it["valor_total"]), produto_id)
+            )
+            if it["gtin"] or it["ncm"]:
+                con.execute(
+                    """UPDATE produto
+                          SET gtin = COALESCE(gtin, ?), ncm = COALESCE(ncm, ?)
+                        WHERE id = ?""",
+                    (it["gtin"], it["ncm"], produto_id)
+                )
+            con.execute(
+                """INSERT OR IGNORE INTO preco
+                       (produto_id, cnpj, unitario_centavos, observado_em, fonte)
+                   VALUES (?,?,?,?,'cupom')""",
+                (produto_id, linha["cnpj"], centavos(it["valor_unitario"]), linha["emitido_em"])
+            )
+
+        con.execute(
+            """UPDATE cupom SET
+                   total_centavos = ?, desconto_centavos = ?, pago_centavos = ?,
+                   completo = ?, avisos = ?
+             WHERE chave = ?""",
+            (centavos(tot_efetivo), centavos(desc) or 0, centavos(pago_efetivo),
+             completo, json.dumps(avisos, ensure_ascii=False) if avisos else None, chave)
+        )
+
+    return True

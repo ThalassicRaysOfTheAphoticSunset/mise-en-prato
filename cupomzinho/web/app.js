@@ -751,6 +751,295 @@ window.enviarHtmlCupom = (input) => {
   input.value = '';
 };
 
+let chaveAtualRevisao = null;
+let fotoBancadaEstado = { escala: 1, transX: 0, transY: 0, rot: 0 };
+let catalogoCarregado = false;
+
+async function carregarCatalogoDatalist() {
+  if (catalogoCarregado) return;
+  try {
+    const { produtos } = await api('/api/produtos');
+    const dl = $('#catalogo-produtos-datalist');
+    if (dl && produtos) {
+      dl.innerHTML = produtos.map((p) => `<option value="${p.descricao}">`).join('');
+      catalogoCarregado = true;
+    }
+  } catch (_) {}
+}
+
+window.fecharBancadaRevisao = () => {
+  $('#revisao-bancada').hidden = true;
+  chaveAtualRevisao = null;
+};
+
+window.abrirBancadaRevisao = async (chave) => {
+  chaveAtualRevisao = chave;
+  await carregarCatalogoDatalist();
+  const cupom = await api('/api/cupom/' + chave);
+  if (!cupom) return;
+
+  $('#bancada-loja').textContent = `Revisando: ${cupom.loja}`;
+  $('#bancada-meta').textContent = `${cupom.emitido_em ? dia(cupom.emitido_em) : ''} · Chave ${formatarChave(chave)}`;
+
+  const blocoFoto = $('#bancada-foto-bloco');
+  if (cupom.foto) {
+    blocoFoto.hidden = false;
+    const img = $('#img-bancada-foto');
+    img.src = '/api/falha/' + cupom.foto;
+    resetarFotoBancada();
+    initGestosFoto();
+  } else {
+    blocoFoto.hidden = true;
+  }
+
+  $('#bancada-desconto').value = cupom.desconto != null ? cupom.desconto : '0.00';
+  $('#bancada-total-pago').value = cupom.valor_pago != null ? cupom.valor_pago : (cupom.total || '0.00');
+
+  const listaEl = $('#bancada-itens-lista');
+  listaEl.innerHTML = '';
+  if (cupom.itens && cupom.itens.length) {
+    cupom.itens.forEach((it) => {
+      listaEl.appendChild(criarElementoLinhaItem(it));
+    });
+  } else {
+    listaEl.appendChild(criarElementoLinhaItem({ descricao: '', quantidade: 1, unidade: 'UN', valor_unitario: '0.00', valor_total: '0.00' }));
+  }
+
+  recalcularCentavosBancada();
+  const bancada = $('#revisao-bancada');
+  bancada.hidden = false;
+  bancada.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+function criarElementoLinhaItem(it) {
+  const row = document.createElement('div');
+  row.className = 'bancada-linha-item';
+  const desc = it.descricao || '';
+  const qtd = it.quantidade != null ? it.quantidade : 1;
+  const un = (it.unidade || 'UN').toUpperCase();
+  const unit = it.valor_unitario != null ? it.valor_unitario : '0.00';
+  const tot = it.valor_total != null ? it.valor_total : '0.00';
+
+  row.innerHTML = `
+    <div style="display:flex;gap:.4rem;align-items:center">
+      <input type="text" class="item-desc" list="catalogo-produtos-datalist"
+             placeholder="Descrição do produto" value="${desc}" required style="flex:1">
+      <button type="button" class="btn-remover-item" onclick="removerLinhaItemBancada(this)" title="Remover item">✕</button>
+    </div>
+    <div class="bancada-linha-campos">
+      <input type="number" class="item-qtd" step="0.001" min="0.001" value="${qtd}"
+             style="width:4.8rem" title="Quantidade" oninput="atualizarSubtotalLinha(this)">
+      <select class="item-un" style="width:3.8rem">
+        ${['UN', 'KG', 'G', 'LT', 'PC', 'CX', 'PCT', 'PT'].map((u) => `<option value="${u}" ${u === un ? 'selected' : ''}>${u}</option>`).join('')}
+      </select>
+      <input type="number" class="item-unit" step="0.01" min="0" value="${unit}"
+             style="width:5.2rem" placeholder="Unitário" oninput="atualizarSubtotalLinha(this)">
+      <span class="fraca" style="font-size:.8rem">=</span>
+      <input type="number" class="item-tot" step="0.01" min="0" value="${tot}"
+             style="width:5.6rem;font-weight:600" placeholder="Total" oninput="recalcularCentavosBancada()">
+    </div>`;
+  return row;
+}
+
+window.adicionarLinhaItemBancada = () => {
+  const listaEl = $('#bancada-itens-lista');
+  const nova = criarElementoLinhaItem({ descricao: '', quantidade: 1, unidade: 'UN', valor_unitario: '0.00', valor_total: '0.00' });
+  listaEl.appendChild(nova);
+  const input = nova.querySelector('.item-desc');
+  if (input) input.focus();
+  recalcularCentavosBancada();
+};
+
+window.removerLinhaItemBancada = (btn) => {
+  const row = btn.closest('.bancada-linha-item');
+  if (row) {
+    row.remove();
+    recalcularCentavosBancada();
+  }
+};
+
+window.atualizarSubtotalLinha = (input) => {
+  const row = input.closest('.bancada-linha-item');
+  if (!row) return;
+  const qtd = Number(row.querySelector('.item-qtd').value.replace(',', '.')) || 0;
+  const unit = Number(row.querySelector('.item-unit').value.replace(',', '.')) || 0;
+  const totInput = row.querySelector('.item-tot');
+  if (totInput) {
+    totInput.value = (Math.round(qtd * unit * 100) / 100).toFixed(2);
+  }
+  recalcularCentavosBancada();
+};
+
+window.recalcularCentavosBancada = () => {
+  const linhas = document.querySelectorAll('.bancada-linha-item');
+  let somaItensCentavos = 0;
+  linhas.forEach((l) => {
+    const totInput = l.querySelector('.item-tot');
+    if (totInput) {
+      const v = Number(totInput.value.replace(',', '.')) || 0;
+      somaItensCentavos += Math.round(v * 100);
+    }
+  });
+
+  const descVal = Number($('#bancada-desconto').value.replace(',', '.')) || 0;
+  const descCentavos = Math.round(descVal * 100);
+  const pagoVal = Number($('#bancada-total-pago').value.replace(',', '.')) || 0;
+  const pagoCentavos = Math.round(pagoVal * 100);
+
+  const esperadoCentavos = somaItensCentavos - descCentavos;
+  const difCentavos = esperadoCentavos - pagoCentavos;
+
+  const barra = $('#bancada-barra-centavos');
+  const btnAprovar = $('#btn-aprovar-cupom');
+
+  if (Math.abs(difCentavos) <= 2) {
+    barra.className = 'barra-centavos verde';
+    barra.innerHTML = `✓ <strong>Soma confere:</strong> R$ ${(somaItensCentavos / 100).toFixed(2)} = Total pago`;
+    btnAprovar.disabled = false;
+  } else {
+    barra.className = 'barra-centavos alerta';
+    const difFmt = (difCentavos / 100).toFixed(2);
+    const sinal = difCentavos > 0 ? '+' : '';
+    barra.innerHTML = `⚠️ <strong>Diferença de ${sinal}R$ ${difFmt}</strong> (Itens: R$ ${(somaItensCentavos / 100).toFixed(2)} | Cupom: R$ ${(pagoCentavos / 100).toFixed(2)})`;
+  }
+};
+
+window.salvarBancadaRevisao = async (aprovar) => {
+  if (!chaveAtualRevisao) return;
+  const linhas = document.querySelectorAll('.bancada-linha-item');
+  const itens = [];
+  linhas.forEach((l) => {
+    const desc = l.querySelector('.item-desc').value.trim();
+    if (!desc) return;
+    const qtd = l.querySelector('.item-qtd').value || '1';
+    const un = l.querySelector('.item-un').value || 'UN';
+    const unit = l.querySelector('.item-unit').value || '0.00';
+    const tot = l.querySelector('.item-tot').value || '0.00';
+    itens.push({ descricao: desc, quantidade: qtd, unidade: un, valor_unitario: unit, valor_total: tot });
+  });
+
+  const descVal = $('#bancada-desconto').value || '0.00';
+  const pagoVal = $('#bancada-total-pago').value || '0.00';
+
+  try {
+    const r = await api(`/api/cupom/${chaveAtualRevisao}/revisar`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        itens,
+        desconto: descVal,
+        valor_pago: pagoVal,
+        aprovar,
+      }),
+    });
+    if (r.ok) {
+      aviso(aprovar ? 'Cupom aprovado e concluído!' : 'Rascunho salvo com sucesso!');
+      if (aprovar) {
+        fecharBancadaRevisao();
+        carregadores.revisao();
+        carregadores.enviar();
+      } else {
+        recalcularCentavosBancada();
+      }
+    }
+  } catch (err) {
+    aviso('Erro ao salvar revisão: ' + err.message);
+  }
+};
+
+window.girarFotoBancada = () => {
+  fotoBancadaEstado.rot = (fotoBancadaEstado.rot + 90) % 360;
+  aplicarTransformFotoBancada();
+};
+
+window.resetarFotoBancada = () => {
+  fotoBancadaEstado = { escala: 1, transX: 0, transY: 0, rot: 0 };
+  aplicarTransformFotoBancada();
+};
+
+function aplicarTransformFotoBancada() {
+  const img = $('#img-bancada-foto');
+  if (img) {
+    img.style.transform = `translate(${fotoBancadaEstado.transX}px, ${fotoBancadaEstado.transY}px) scale(${fotoBancadaEstado.escala}) rotate(${fotoBancadaEstado.rot}deg)`;
+  }
+}
+
+let gestosFotoInit = false;
+function initGestosFoto() {
+  if (gestosFotoInit) return;
+  gestosFotoInit = true;
+  const container = $('#area-foto-interativa');
+  if (!container) return;
+
+  let arrastando = false;
+  let ultimoX = 0;
+  let ultimoY = 0;
+  let toqueDistInicial = 0;
+  let toqueEscalaInicial = 1;
+
+  container.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? 0.15 : -0.15;
+    fotoBancadaEstado.escala = Math.max(0.5, Math.min(5, fotoBancadaEstado.escala + delta));
+    aplicarTransformFotoBancada();
+  }, { passive: false });
+
+  container.addEventListener('mousedown', (e) => {
+    arrastando = true;
+    ultimoX = e.clientX;
+    ultimoY = e.clientY;
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!arrastando) return;
+    fotoBancadaEstado.transX += e.clientX - ultimoX;
+    fotoBancadaEstado.transY += e.clientY - ultimoY;
+    ultimoX = e.clientX;
+    ultimoY = e.clientY;
+    aplicarTransformFotoBancada();
+  });
+
+  window.addEventListener('mouseup', () => { arrastando = false; });
+
+  container.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) {
+      arrastando = true;
+      ultimoX = e.touches[0].clientX;
+      ultimoY = e.touches[0].clientY;
+    } else if (e.touches.length === 2) {
+      arrastando = false;
+      toqueDistInicial = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      toqueEscalaInicial = fotoBancadaEstado.escala;
+    }
+  }, { passive: true });
+
+  container.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 1 && arrastando) {
+      fotoBancadaEstado.transX += e.touches[0].clientX - ultimoX;
+      fotoBancadaEstado.transY += e.touches[0].clientY - ultimoY;
+      ultimoX = e.touches[0].clientX;
+      ultimoY = e.touches[0].clientY;
+      aplicarTransformFotoBancada();
+    } else if (e.touches.length === 2 && toqueDistInicial > 0) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const ratio = dist / toqueDistInicial;
+      fotoBancadaEstado.escala = Math.max(0.5, Math.min(5, toqueEscalaInicial * ratio));
+      aplicarTransformFotoBancada();
+    }
+  }, { passive: true });
+
+  container.addEventListener('touchend', () => {
+    arrastando = false;
+    toqueDistInicial = 0;
+  });
+}
+
 carregadores.revisao = async () => {
   const [{ revisao }, { falhas }] = await Promise.all([
     api('/api/cupons'),
@@ -767,7 +1056,7 @@ carregadores.revisao = async () => {
       const fotoBtn = c.foto ? `
         <button type="button" class="acao" onclick="abrirFotoDestaque('${c.foto}', '${c.loja}', '${c.chave}')"
                 style="background:var(--realce);color:var(--tinta);border:1px solid var(--borda)">
-          📷 Consultar foto (${c.foto})
+          📷 Foto salva (${c.foto})
         </button>` : '';
       return `
         <div class="cartao" style="margin-bottom:.8rem">
@@ -783,6 +1072,10 @@ carregadores.revisao = async () => {
             <span>${formatarChave(c.chave)}</span>
           </div>
           <div class="linha" style="gap:.4rem;flex-wrap:wrap">
+            <button type="button" class="acao" onclick="abrirBancadaRevisao('${c.chave}')"
+                    style="background:var(--verde);color:#fff;font-weight:600">
+              🛠️ Revisar cupom
+            </button>
             <button type="button" class="acao" onclick="navigator.clipboard.writeText('${c.chave}');aviso('Chave copiada!')">
               📋 Copiar chave
             </button>

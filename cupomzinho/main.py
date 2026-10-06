@@ -529,6 +529,53 @@ async def ver_cupom(chave: str, _: Morador, con: Banco):
     return responder(guardado)
 
 
+class ItemRevisao(BaseModel):
+    descricao: str
+    quantidade: str = "1"
+    unidade: str = "UN"
+    valor_unitario: str = "0.00"
+    valor_total: str = "0.00"
+
+
+class RequisicaoRevisao(BaseModel):
+    itens: list[ItemRevisao]
+    total: str | None = None
+    desconto: str | None = None
+    valor_pago: str | None = None
+    aprovar: bool = False
+
+
+@app.post("/api/cupom/{chave}/revisar")
+async def revisar_cupom(chave: str, req: RequisicaoRevisao, _quem: Morador, con: Banco):
+    """Atualiza itens de um cupom e permite aprovação para sair da fila de revisão."""
+    if not cupons.existe(con, chave):
+        raise HTTPException(404, "cupom não encontrado")
+
+    novos_itens = [
+        {
+            "descricao": it.descricao,
+            "quantidade": it.quantidade,
+            "unidade": it.unidade,
+            "valor_unitario": it.valor_unitario,
+            "valor_total": it.valor_total,
+        }
+        for it in req.itens
+    ]
+
+    total_dec = Decimal(req.total) if req.total is not None else None
+    desc_dec = Decimal(req.desconto) if req.desconto is not None else None
+    pago_dec = Decimal(req.valor_pago) if req.valor_pago is not None else None
+
+    ok = cupons.revisar(
+        con, chave, novos_itens,
+        total=total_dec, desconto=desc_dec, valor_pago=pago_dec, aprovar=req.aprovar,
+    )
+    if not ok:
+        raise HTTPException(500, "falha ao atualizar cupom")
+
+    return responder({"ok": True, "cupom": cupons.ler(con, chave)})
+
+
 @app.get("/api/falhas")
 async def listar_falhas(_: Morador, con: Banco):
     """Fotos que não deram leitura de QR e ficaram salvas para análise."""

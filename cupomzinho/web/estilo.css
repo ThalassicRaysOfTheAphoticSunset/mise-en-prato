@@ -199,3 +199,58 @@ svg.grafico text { fill: var(--fraca); font-size: 10px; }
 }
 .btn-preset:active { border-color: var(--verde); color: var(--verde); }
 
+/* ── conferência de centavos e bancada de revisão ─────────────────────────── */
+.barra-centavos {
+  padding: .65rem .85rem; border-radius: 10px; font-size: .88rem;
+  margin-bottom: .9rem; display: flex; align-items: center; gap: .5rem;
+  transition: background .2s, color .2s;
+}
+.barra-centavos.verde {
+  background: var(--realce); color: var(--verde);
+  border: 1px solid var(--verde);
+}
+.barra-centavos.alerta {
+  background: rgba(239, 68, 68, .12); color: var(--alerta);
+  border: 1px solid var(--alerta);
+}
+.bancada-grade {
+  display: flex; flex-direction: column; gap: 1rem;
+}
+@media (min-width: 768px) {
+  .bancada-grade { display: grid; grid-template-columns: 1fr 1.3fr; gap: 1.2rem; }
+}
+.area-foto-interativa {
+  position: relative; height: 360px; background: #000;
+  border-radius: 10px; overflow: hidden; touch-action: none;
+  display: flex; align-items: center; justify-content: center;
+  user-select: none; cursor: grab;
+}
+.area-foto-interativa:active { cursor: grabbing; }
+.area-foto-interativa img {
+  max-width: 100%; max-height: 100%; object-fit: contain;
+  transition: transform .05s ease-out; transform-origin: center center;
+  pointer-events: none;
+}
+.bancada-itens-lista {
+  display: flex; flex-direction: column; gap: .5rem;
+  max-height: 480px; overflow-y: auto; padding-right: .2rem;
+}
+.bancada-linha-item {
+  background: var(--realce); border: 1px solid var(--borda);
+  border-radius: 8px; padding: .5rem .6rem;
+  display: flex; flex-direction: column; gap: .35rem;
+}
+.bancada-linha-campos {
+  display: flex; gap: .4rem; align-items: center;
+}
+.bancada-linha-campos input, .bancada-linha-campos select {
+  padding: .35rem .5rem; font-size: .85rem;
+  background: var(--painel); border: 1px solid var(--borda);
+  border-radius: 6px; color: var(--tinta);
+}
+.btn-remover-item {
+  background: none; border: 0; color: var(--alerta);
+  cursor: pointer; font-size: 1.15rem; padding: 0 .4rem; line-height: 1;
+}
+
+

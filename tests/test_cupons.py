@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from cupomzinho.banco import conectar
-from cupomzinho.cupons import existe, fila_de_revisao, gravar, ler, recentes
+from cupomzinho.cupons import existe, fila_de_revisao, gravar, ler, recentes, revisar
 from cupomzinho.nfce_pr import interpretar
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cupom_lar_2026-08-14.html"
@@ -107,6 +107,35 @@ def test_cupom_incompleto_vai_para_a_fila(con):
     fila = fila_de_revisao(con)
     assert len(fila) == 1 and fila[0]["chave"] == "9" * 44
     assert fila[0]["avisos"]
+
+
+def test_revisar_cupom_incompleto_e_aprovar(con):
+    quebrado = interpretar("<html><body>indisponível</body></html>")
+    quebrado.chave = "8" * 44
+    quebrado.estabelecimento.cnpj = "12345678000190"
+    quebrado.estabelecimento.razao = "PADARIA DO BAIRRO"
+    gravar(con, quebrado, morador="Miguel")
+    assert len(fila_de_revisao(con)) == 1
+
+    novos_itens = [
+        {"descricao": "PAO DE FORMA", "quantidade": Decimal("1.000"), "unidade": "UN",
+         "valor_unitario": Decimal("8.50"), "valor_total": Decimal("8.50")},
+        {"descricao": "MANTEIGA 200G", "quantidade": Decimal("1.000"), "unidade": "UN",
+         "valor_unitario": Decimal("11.50"), "valor_total": Decimal("11.50")},
+    ]
+
+    # 1. Se salvar sem aprovar e com matemática batendo -> fecha
+    ok = revisar(con, quebrado.chave, novos_itens, total=Decimal("20.00"),
+                 valor_pago=Decimal("20.00"), aprovar=True)
+    assert ok is True
+
+    # Saiu da fila de revisão!
+    assert fila_de_revisao(con) == []
+
+    lido = ler(con, quebrado.chave)
+    assert lido["completo"] is True
+    assert len(lido["itens"]) == 2
+    assert lido["valor_pago"] == Decimal("20.00")
 
 
 def test_recentes_e_existe(con, cupom):

@@ -345,3 +345,41 @@ def test_enviar_html_invalido(cliente):
     )
     assert r.status_code == 400
 
+
+def test_revisar_cupom_endpoint(cliente):
+    # Criar um cupom incompleto no banco
+    quebrado = interpretar("<html><body>indisponível</body></html>")
+    quebrado.chave = "7" * 44
+    quebrado.estabelecimento.cnpj = "12345678000190"
+    quebrado.estabelecimento.razao = "SUPERMERCADO LOCAL"
+    gravar(cliente.app.state.con, quebrado, morador="Miguel")
+
+    # Verifica que está na fila de revisão
+    corpo = cliente.get("/api/cupons").json()
+    assert any(c["chave"] == quebrado.chave for c in corpo["revisao"])
+
+    # Revisa com itens e aprova
+    r = cliente.post(f"/api/cupom/{quebrado.chave}/revisar", json={
+        "itens": [
+            {"descricao": "CAFE EM PO 500G", "quantidade": "1", "unidade": "UN",
+             "valor_unitario": "18.90", "valor_total": "18.90"},
+            {"descricao": "ACUCAR CRISTAL 1KG", "quantidade": "2", "unidade": "UN",
+             "valor_unitario": "4.50", "valor_total": "9.00"},
+        ],
+        "total": "27.90",
+        "desconto": "0.00",
+        "valor_pago": "27.90",
+        "aprovar": True,
+    })
+    assert r.status_code == 200, r.text
+    dados = r.json()
+    assert dados["ok"] is True
+    assert dados["cupom"]["completo"] is True
+    assert len(dados["cupom"]["itens"]) == 2
+    assert dados["cupom"]["valor_pago"] == "27.90"
+
+    # Não está mais na fila de revisão
+    corpo_depois = cliente.get("/api/cupons").json()
+    assert not any(c["chave"] == quebrado.chave for c in corpo_depois["revisao"])
+
+
