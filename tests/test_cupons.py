@@ -173,3 +173,20 @@ def test_quantidade_some_quando_as_unidades_divergem(con, cupom):
     atum = next(p for p in produtos(con) if p["descricao"].startswith("ATUM"))
     assert atum["quantidade"] is None and atum["unidade"] is None
     assert atum["compras"] == 1        # o número de compras continua honesto
+
+
+def test_gravar_completa_cupom_incompleto(con, cupom):
+    """Cupom que entrou pela metade pode ser completado por reenvio ou reconsulta."""
+    incompleto = interpretar("<html><body>erro</body></html>")
+    incompleto.chave = cupom.chave
+    incompleto.estabelecimento = cupom.estabelecimento
+    assert gravar(con, incompleto, morador="Miguel") is True
+    assert ler(con, cupom.chave)["completo"] is False
+    assert len(fila_de_revisao(con)) == 1
+
+    # Reenvio com o cupom completo real atualiza o registro
+    assert gravar(con, cupom, morador="Miguel") is True
+    salvo = ler(con, cupom.chave)
+    assert salvo["completo"] is True
+    assert len(salvo["itens"]) == 16
+    assert len(fila_de_revisao(con)) == 0

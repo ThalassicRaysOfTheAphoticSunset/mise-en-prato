@@ -61,11 +61,82 @@ def _produto_de(con: sqlite3.Connection, cnpj: str, descricao: str) -> int:
     return produto_id
 
 
+def foto_de_falha_proxima(criado_em_str: str | None) -> str | None:
+    """Acha a foto em falhas/ mais próxima do momento em que o cupom foi criado."""
+    if not criado_em_str:
+        return None
+    try:
+        dt_cupom = datetime.fromisoformat(criado_em_str)
+    except (ValueError, TypeError):
+        return None
+    from .config import config
+
+    pasta = config().dados / "falhas"
+    if not pasta.is_dir():
+        return None
+    melhor_foto = None
+    menor_delta = 900  # até 15 minutos de diferença
+    for arq in pasta.glob("*.jpg"):
+        try:
+            dt_foto = datetime.strptime(arq.stem, "%Y-%m-%d_%H%M%S")
+            delta = abs((dt_cupom - dt_foto).total_seconds())
+            if delta < menor_delta:
+                menor_delta = delta
+                melhor_foto = arq.name
+        except ValueError:
+            continue
+    return melhor_foto
+
+
 def gravar(con: sqlite3.Connection, cupom: Cupom, *, morador: str,
            origem: str = "qrcode", url_qr: str = "") -> bool:
-    """Grava o cupom inteiro numa transação. Devolve True se era novo."""
-    if existe(con, cupom.chave):
-        return False
+    """Grava o cupom inteiro numa transação. Devolve True se era novo ou completou."""
+    linha_existente = con.execute(
+        "SELECT completo FROM cupom WHERE chave = ?", (cupom.chave,)
+    ).fetchone()
+
+    if linha_existente:
+        if linha_existente["completo"]:
+            return False
+        # Já existia, mas era incompleto: atualiza com os novos dados
+        with con:
+            _garantir_estabelecimento(con, cupom.estabelecimento)
+            con.execute("DELETE FROM item WHERE chave = ?", (cupom.chave,))
+            con.execute(
+                """UPDATE cupom SET
+                       cnpj = ?, emitido_em = ?, numero = ?, serie = ?, protocolo = ?,
+                       total_centavos = ?, desconto_centavos = ?, pago_centavos = ?,
+                       forma_pagamento = ?, consumidor = ?, morador = ?, origem = ?,
+                       completo = ?, avisos = ?, url_qr = COALESCE(NULLIF(?, ''), url_qr)
+                 WHERE chave = ?""",
+                (cupom.estabelecimento.cnpj,
+                 cupom.emitido_em.isoformat(sep=" ") if cupom.emitido_em else None,
+                 cupom.numero, cupom.serie, cupom.protocolo,
+                 centavos(cupom.total), centavos(cupom.desconto) or 0, centavos(cupom.valor_pago),
+                 cupom.forma_pagamento, cupom.consumidor, morador, origem,
+                 1 if cupom.completo else 0,
+                 json.dumps(cupom.avisos, ensure_ascii=False) if cupom.avisos else None,
+                 url_qr, cupom.chave),
+            )
+            for item in cupom.itens:
+                produto_id = _produto_de(con, cupom.estabelecimento.cnpj, item.descricao)
+                con.execute(
+                    """INSERT INTO item (chave, seq, descricao, codigo_loja, unidade,
+                                         quantidade_milesimos, unitario_centavos, total_centavos,
+                                         produto_id)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (cupom.chave, item.seq, item.descricao, item.codigo_loja, item.unidade,
+                     milesimos(item.quantidade), centavos(item.valor_unitario),
+                     centavos(item.valor_total), produto_id),
+                )
+                con.execute(
+                    """INSERT OR IGNORE INTO preco
+                           (produto_id, cnpj, unitario_centavos, observado_em, fonte)
+                       VALUES (?,?,?,?,'cupom')""",
+                    (produto_id, cupom.estabelecimento.cnpj, centavos(item.valor_unitario),
+                     cupom.emitido_em.isoformat(sep=" ") if cupom.emitido_em else None),
+                )
+        return True
 
     with con:  # transação: ou entra o cupom todo, ou não entra nada
         _garantir_estabelecimento(con, cupom.estabelecimento)
@@ -133,6 +204,7 @@ def ler(con: sqlite3.Connection, chave: str) -> dict | None:
         "forma_pagamento": linha["forma_pagamento"],
         "completo": bool(linha["completo"]),
         "avisos": json.loads(linha["avisos"]) if linha["avisos"] else [],
+        "foto": foto_de_falha_proxima(linha["criado_em"]) if not bool(linha["completo"]) else None,
         "itens": itens,
     }
 
@@ -140,11 +212,15 @@ def ler(con: sqlite3.Connection, chave: str) -> dict | None:
 def fila_de_revisao(con: sqlite3.Connection) -> list[dict]:
     """Cupons que entraram pela metade e esperam um olho humano."""
     return [
-        {"chave": r["chave"], "loja": r["razao"], "emitido_em": r["emitido_em"],
+        {"chave": r["chave"], "loja": r["razao"], "cnpj": r["cnpj"],
+         "numero": r["numero"], "serie": r["serie"], "morador": r["morador"],
+         "criado_em": r["criado_em"], "emitido_em": r["emitido_em"],
          "valor_pago": reais(r["pago_centavos"]),
-         "avisos": json.loads(r["avisos"]) if r["avisos"] else []}
+         "avisos": json.loads(r["avisos"]) if r["avisos"] else [],
+         "foto": foto_de_falha_proxima(r["criado_em"])}
         for r in con.execute(
-            """SELECT c.chave, c.emitido_em, c.pago_centavos, c.avisos, e.razao
+            """SELECT c.chave, c.emitido_em, c.criado_em, c.numero, c.serie,
+                      c.morador, c.pago_centavos, c.avisos, e.razao, e.cnpj
                  FROM cupom c JOIN estabelecimento e ON e.cnpj = c.cnpj
                 WHERE c.completo = 0 ORDER BY c.criado_em DESC""")
     ]

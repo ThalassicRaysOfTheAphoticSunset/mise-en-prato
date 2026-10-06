@@ -35,14 +35,18 @@ function aviso(texto, ruim) {
 
 /* ── abas ─────────────────────────────────────────────────────────────────── */
 const carregadores = {};
+function mudarAba(nome) {
+  document.querySelectorAll('#abas button').forEach((b) => b.classList.toggle('ativa', b.dataset.aba === nome));
+  ['enviar', 'gastos', 'produtos', 'lista', 'revisao'].forEach((n) => {
+    const el = $('#aba-' + n);
+    if (el) el.hidden = n !== nome;
+  });
+  carregadores[nome]?.();
+}
+window.mudarAba = mudarAba;
+
 document.querySelectorAll('#abas button').forEach((botao) => {
-  botao.onclick = () => {
-    document.querySelectorAll('#abas button').forEach((b) => b.classList.toggle('ativa', b === botao));
-    ['enviar', 'gastos', 'produtos', 'lista'].forEach((nome) => {
-      $('#aba-' + nome).hidden = nome !== botao.dataset.aba;
-    });
-    carregadores[botao.dataset.aba]?.();
-  };
+  botao.onclick = () => mudarAba(botao.dataset.aba);
 });
 
 /* ── enviar ───────────────────────────────────────────────────────────────── */
@@ -55,9 +59,16 @@ function cartaoCupom(c, selo) {
     <div class="cartao" style="margin-top:.9rem">
       <div class="linha"><strong>${c.loja}</strong>
         <span class="selo">${selo}</span></div>
-      <div class="fraca">${c.municipio} · ${dia(c.emitido_em)} · ${c.forma_pagamento || ''}</div>
+      <div class="fraca">${c.municipio || ''} · ${dia(c.emitido_em)} · ${c.forma_pagamento || ''}</div>
       ${c.avisos.length ? `<div class="estado ruim" style="margin:.7rem 0">
           ${c.avisos.map((a) => `• ${a}`).join('<br>')}</div>` : ''}
+      ${c.foto ? `
+        <div style="margin:.7rem 0">
+          <button type="button" class="acao" onclick="mudarAba('revisao');abrirFotoDestaque('${c.foto}','Foto do cupom','${c.chave}')"
+                  style="font-size:.82rem;padding:.35rem .7rem">
+            📷 Consultar foto salva (${c.foto})
+          </button>
+        </div>` : ''}
       <table style="margin-top:.7rem">${itens}</table>
       <div class="linha" style="margin-top:.7rem;border-top:1px solid var(--borda);padding-top:.6rem">
         <span>Total pago</span><strong class="num">${dinheiro(c.valor_pago)}</strong></div>
@@ -185,13 +196,18 @@ $('#form-manual').onsubmit = async (ev) => {
 
 carregadores.enviar = async () => {
   const { cupons, revisao } = await api('/api/cupons');
+  const btnRevisao = $('#btn-revisao');
+  if (btnRevisao) {
+    btnRevisao.textContent = revisao.length ? `Revisão (${revisao.length})` : 'Revisão';
+  }
   $('#revisao').innerHTML = revisao.length ? `
-    <div class="estado ruim" style="margin-bottom:.6rem">
-      ${revisao.length} cupom(ns) entraram pela metade e esperam revisão.</div>` : '';
+    <div class="estado ruim clicavel" onclick="mudarAba('revisao')" style="margin-bottom:.6rem;cursor:pointer">
+      ⚠️ <strong>${revisao.length} cupom(ns) entraram pela metade</strong>. Toque para consultar a imagem e revisar →
+    </div>` : '';
   $('#lista-cupons').innerHTML = cupons.length
     ? cupons.map((c) => `
         <div class="linha clicavel" onclick="verCupom('${c.chave}')">
-          <div>${c.loja}<div class="fraca">${dia(c.emitido_em)} · ${c.itens} itens · ${c.morador || '—'}</div></div>
+          <div>${c.loja}<div class="fraca">${dia(c.emitido_em)} · ${c.itens} itens · ${c.morador || '—'}${c.completo ? '' : ' · <span style="color:var(--alerta)">incompleto</span>'}</div></div>
           <strong class="num">${dinheiro(c.valor_pago)}</strong>
         </div>`).join('')
     : '<div class="fraca">Nenhum cupom ainda. Fotografe o QR do próximo.</div>';
@@ -493,6 +509,179 @@ window.pesquisarPrecos = async () => {
   } catch (erro) {
     caixa.className = 'estado ruim';
     caixa.textContent = erro.message;
+  }
+};
+
+/* ── revisão e consulta de fotos ─────────────────────────────────────────── */
+let estadoFotoDestaque = { rotacao: 0, ampliada: false, arquivo: null };
+
+function formatarChave(chave) {
+  return chave ? chave.replace(/(\d{4})(?=\d)/g, '$1 ') : '';
+}
+
+function atualizarTransformacaoFoto() {
+  const img = $('#img-destaque');
+  if (!img) return;
+  const { rotacao, ampliada } = estadoFotoDestaque;
+  img.style.transform = `rotate(${rotacao}deg)`;
+  img.classList.toggle('ampliada', ampliada);
+  if (!ampliada && (rotacao === 90 || rotacao === 270)) {
+    img.style.maxWidth = '60vh';
+    img.style.maxHeight = '80vw';
+  } else if (!ampliada) {
+    img.style.maxWidth = '100%';
+    img.style.maxHeight = '60vh';
+  }
+}
+
+window.abrirFotoDestaque = (arquivo, titulo, chave) => {
+  estadoFotoDestaque = {
+    rotacao: arquivo.includes('2026-09-26') ? 90 : 0,
+    ampliada: false,
+    arquivo,
+  };
+  const caixa = $('#revisao-destaque-foto');
+  $('#destaque-foto-titulo').textContent = titulo || arquivo;
+  $('#destaque-foto-selo').textContent = arquivo;
+  $('#destaque-foto-subtitulo').textContent = chave ? `Chave: ${formatarChave(chave)}` : '';
+  const img = $('#img-destaque');
+  img.src = '/api/falha/' + arquivo;
+  atualizarTransformacaoFoto();
+
+  let acoesHtml = '';
+  if (chave) {
+    acoesHtml = `
+      <div class="linha" style="gap:.5rem;flex-wrap:wrap">
+        <button type="button" class="acao" onclick="navigator.clipboard.writeText('${chave}');aviso('Chave copiada!')">
+          📋 Copiar chave
+        </button>
+        <button type="button" class="acao" onclick="preencherChave('${chave}')">
+          ⚡ Consultar pela chave
+        </button>
+        <button type="button" class="acao" onclick="preencherManual('${chave}')">
+          ✍ Registrar total
+        </button>
+      </div>`;
+  }
+  $('#destaque-foto-acoes').innerHTML = acoesHtml;
+  caixa.hidden = false;
+  caixa.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+$('#btn-girar-destaque').onclick = () => {
+  estadoFotoDestaque.rotacao = (estadoFotoDestaque.rotacao + 90) % 360;
+  atualizarTransformacaoFoto();
+};
+
+$('#btn-zoom-destaque').onclick = () => {
+  estadoFotoDestaque.ampliada = !estadoFotoDestaque.ampliada;
+  $('#btn-zoom-destaque').textContent = estadoFotoDestaque.ampliada ? '🔍 Ajustar' : '🔍 Ampliar';
+  atualizarTransformacaoFoto();
+};
+
+$('#img-destaque').onclick = () => {
+  estadoFotoDestaque.ampliada = !estadoFotoDestaque.ampliada;
+  $('#btn-zoom-destaque').textContent = estadoFotoDestaque.ampliada ? '🔍 Ajustar' : '🔍 Ampliar';
+  atualizarTransformacaoFoto();
+};
+
+$('#btn-fechar-destaque').onclick = () => {
+  $('#revisao-destaque-foto').hidden = true;
+};
+
+window.preencherChave = async (chave) => {
+  mudarAba('enviar');
+  const det = $('#alt-chave');
+  if (det) det.open = true;
+  $('#chave').value = chave;
+  await abrirDesafio();
+  $('#captcha').focus();
+  $('#alt-chave').scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+window.preencherManual = (chave, emitidoEm) => {
+  mudarAba('enviar');
+  const detChave = $('#alt-chave');
+  if (detChave) detChave.open = true;
+  $('#chave').value = chave;
+  if (emitidoEm) {
+    $('#manual-data').value = emitidoEm.slice(0, 10);
+  }
+  const detManual = $('#form-manual').closest('details');
+  if (detManual) detManual.open = true;
+  $('#manual-total').focus();
+  $('#manual-total').scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+carregadores.revisao = async () => {
+  const [{ revisao }, { falhas }] = await Promise.all([
+    api('/api/cupons'),
+    api('/api/falhas'),
+  ]);
+
+  const btn = $('#btn-revisao');
+  if (btn) btn.textContent = revisao.length ? `Revisão (${revisao.length})` : 'Revisão';
+
+  if (!revisao.length) {
+    $('#revisao-cupons').innerHTML = '<div class="fraca">Nenhum cupom pendente de revisão.</div>';
+  } else {
+    $('#revisao-cupons').innerHTML = revisao.map((c) => {
+      const fotoBtn = c.foto ? `
+        <button type="button" class="acao" onclick="abrirFotoDestaque('${c.foto}', '${c.loja}', '${c.chave}')"
+                style="background:var(--realce);color:var(--tinta);border:1px solid var(--borda)">
+          📷 Consultar foto (${c.foto})
+        </button>` : '';
+      return `
+        <div class="cartao" style="margin-bottom:.8rem">
+          <div class="linha">
+            <strong>${c.loja}</strong>
+            <span class="selo aviso">incompleto</span>
+          </div>
+          <div class="fraca">${c.cnpj ? 'CNPJ ' + c.cnpj : ''} · ${dia(c.emitido_em || c.criado_em)} · ${c.morador || '—'}</div>
+          ${c.numero ? `<div class="fraca">NFC-e nº ${c.numero} · Série ${c.serie || '—'}</div>` : ''}
+          ${c.avisos.length ? `<div class="estado ruim" style="margin:.6rem 0">
+              ${c.avisos.map((a) => `• ${a}`).join('<br>')}</div>` : ''}
+          <div class="linha" style="margin:.6rem 0;font-family:monospace;font-size:.85rem;word-break:break-all">
+            <span>${formatarChave(c.chave)}</span>
+          </div>
+          <div class="linha" style="gap:.4rem;flex-wrap:wrap">
+            <button type="button" class="acao" onclick="navigator.clipboard.writeText('${c.chave}');aviso('Chave copiada!')">
+              📋 Copiar chave
+            </button>
+            <button type="button" class="acao" onclick="preencherChave('${c.chave}')">
+              ⚡ Consultar pela chave
+            </button>
+            <button type="button" class="acao" onclick="preencherManual('${c.chave}', '${c.emitido_em || ''}')">
+              ✍ Total manual
+            </button>
+            ${fotoBtn}
+          </div>
+        </div>`;
+    }).join('');
+
+    const primeiroComFoto = revisao.find((c) => c.foto);
+    if (primeiroComFoto && $('#revisao-destaque-foto').hidden) {
+      abrirFotoDestaque(primeiroComFoto.foto, `Foto de ${primeiroComFoto.loja}`, primeiroComFoto.chave);
+    }
+  }
+
+  if (!falhas.length) {
+    $('#revisao-galeria').innerHTML = '<div class="fraca">Nenhuma foto salva.</div>';
+  } else {
+    $('#revisao-galeria').innerHTML = falhas.map((f) => {
+      const dataFmt = f.data ? dia(f.data) + ' ' + f.data.slice(11, 16) : f.arquivo;
+      const temCupom = f.cupom ? `· cupom #${f.cupom.chave.slice(-6)}` : '';
+      const chaveArg = f.cupom ? `'${f.cupom.chave}'` : 'null';
+      const tituloArg = f.cupom ? `'Foto do cupom (${f.cupom.loja})'` : `'Foto ${f.arquivo}'`;
+      return `
+        <div class="cartao-falha" onclick="abrirFotoDestaque('${f.arquivo}', ${tituloArg}, ${chaveArg})">
+          <img src="/api/falha/${f.arquivo}" alt="${f.arquivo}" loading="lazy">
+          <div class="info">
+            <div class="data">${dataFmt}</div>
+            <div class="meta">${f.tamanho_kb} KB ${temCupom}</div>
+          </div>
+        </div>`;
+    }).join('');
   }
 };
 

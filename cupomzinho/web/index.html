@@ -22,6 +22,7 @@
   <button data-aba="gastos">Gastos</button>
   <button data-aba="produtos">Produtos</button>
   <button data-aba="lista">Lista</button>
+  <button data-aba="revisao" id="btn-revisao">Revisão</button>
 </nav>
 
 <main>
@@ -115,6 +116,35 @@
     <div id="lista-comparacao"></div>
     <h2>Adicionar do que a casa compra</h2>
     <div id="lista-sugestoes" class="lista"></div>
+  </section>
+
+  <!-- ── revisão ──────────────────────────────────────────────────────────── -->
+  <section id="aba-revisao" hidden>
+    <h2>Cupons incompletos</h2>
+    <div id="revisao-cupons"></div>
+
+    <div id="revisao-destaque-foto" class="cartao" style="margin-top:1.2rem" hidden>
+      <div class="linha">
+        <strong id="destaque-foto-titulo">Foto</strong>
+        <span id="destaque-foto-selo" class="selo"></span>
+      </div>
+      <div id="destaque-foto-subtitulo" class="fraca" style="margin:.3rem 0 .6rem"></div>
+      <div class="visualizador-foto">
+        <div class="barra-foto">
+          <button type="button" id="btn-girar-destaque">⟳ Girar 90°</button>
+          <button type="button" id="btn-zoom-destaque">🔍 Ampliar</button>
+          <button type="button" id="btn-fechar-destaque">✕ Fechar</button>
+        </div>
+        <div class="conteiner-img">
+          <img id="img-destaque" alt="Foto do cupom">
+        </div>
+      </div>
+      <div id="destaque-foto-acoes" style="margin-top:.8rem"></div>
+    </div>
+
+    <h2>Fotos salvas (QR não identificado)</h2>
+    <p class="dica">Fotos cujo QR Code não pôde ser decodificado pelo servidor. Ficam guardadas para consulta e diagnóstico.</p>
+    <div id="revisao-galeria" class="grade-falhas"></div>
   </section>
 </main>
 

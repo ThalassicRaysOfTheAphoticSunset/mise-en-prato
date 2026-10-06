@@ -303,3 +303,24 @@ def test_manual_recusa_total_que_nao_e_numero(cliente):
     r = cliente.post("/api/cupom/manual", json={
         "chave": _com_dv(CHAVE_NOVA), "total": "", "emitido_em": "2026-08-24"})
     assert r.status_code == 400
+
+
+def test_listar_falhas_e_servir_foto(cliente, tmp_path):
+    pasta_falhas = tmp_path / "falhas"
+    pasta_falhas.mkdir(parents=True, exist_ok=True)
+    foto = pasta_falhas / "2026-09-26_113651.jpg"
+    foto.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 20)
+
+    r = cliente.get("/api/falhas")
+    assert r.status_code == 200
+    falhas = r.json()["falhas"]
+    assert len(falhas) == 1
+    assert falhas[0]["arquivo"] == "2026-09-26_113651.jpg"
+
+    r_foto = cliente.get("/api/falha/2026-09-26_113651.jpg")
+    assert r_foto.status_code == 200
+    assert r_foto.headers["content-type"].startswith("image/jpeg")
+    assert len(r_foto.content) == 24
+
+    r_invalido = cliente.get("/api/falha/.._etc_passwd")
+    assert r_invalido.status_code in (400, 404)

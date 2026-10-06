@@ -10,6 +10,7 @@ que chega já passou pelo Tailscale — falta apenas perguntar ao tailscaled que
 import asyncio
 import json
 import logging
+import re
 import sqlite3
 import sys
 from contextlib import asynccontextmanager
@@ -350,6 +351,7 @@ class EnvioChave(BaseModel):
     chave: str                 # os 44 dígitos, com ou sem os espaços do papel
     desafio: str               # o id devolvido por /api/chave/desafio
     captcha: str               # as letras que o morador leu na imagem
+    reconsultar: bool = False  # forçar reconsulta no portal
 
 
 class EnvioManual(BaseModel):
@@ -388,7 +390,7 @@ def enviar_chave(envio: EnvioChave, quem: Morador, con: Banco):
     o captcha. E o captcha, uma vez usado, não volta: erro rende desafio novo.
     """
     chave = _chave_valida(envio.chave)
-    if (guardado := _ja_guardado(con, chave)):
+    if not envio.reconsultar and (guardado := _ja_guardado(con, chave)):
         return responder(guardado)
 
     desafio = _desafios.pop(envio.desafio, None)
@@ -428,7 +430,8 @@ def enviar_manual(envio: EnvioManual, quem: Morador, con: Banco):
     sem itens, com aviso, e cai na fila de revisão para ser reconsultado depois.
     """
     chave = _chave_valida(envio.chave)
-    if (guardado := _ja_guardado(con, chave)):
+    guardado = _ja_guardado(con, chave)
+    if guardado and guardado["cupom"]["completo"]:
         return responder(guardado)
 
     cupom = _cupom_da_chave(
@@ -464,6 +467,63 @@ async def ver_cupom(chave: str, _: Morador, con: Banco):
     if not guardado:
         raise HTTPException(404, "cupom não encontrado")
     return responder(guardado)
+
+
+@app.get("/api/falhas")
+async def listar_falhas(_: Morador, con: Banco):
+    """Fotos que não deram leitura de QR e ficaram salvas para análise."""
+    pasta = config().dados / "falhas"
+    if not pasta.is_dir():
+        return responder({"falhas": []})
+
+    cupons_banco = con.execute(
+        "SELECT c.chave, c.emitido_em, c.criado_em, c.completo, e.razao "
+        "FROM cupom c JOIN estabelecimento e ON e.cnpj = c.cnpj"
+    ).fetchall()
+
+    fotos = []
+    for arq in sorted(pasta.glob("*.jpg"), reverse=True):
+        stat = arq.stat()
+        data_foto = None
+        try:
+            data_foto = datetime.strptime(arq.stem, "%Y-%m-%d_%H%M%S")
+        except ValueError:
+            pass
+
+        cupom_casado = None
+        if data_foto:
+            for c in cupons_banco:
+                try:
+                    dt_c = datetime.fromisoformat(c["criado_em"])
+                    if abs((data_foto - dt_c).total_seconds()) <= 900:
+                        cupom_casado = {
+                            "chave": c["chave"],
+                            "loja": c["razao"],
+                            "completo": bool(c["completo"]),
+                            "criado_em": c["criado_em"],
+                        }
+                        break
+                except (ValueError, TypeError):
+                    continue
+
+        fotos.append({
+            "arquivo": arq.name,
+            "data": data_foto.isoformat(sep=" ") if data_foto else "",
+            "tamanho_kb": stat.st_size // 1024,
+            "cupom": cupom_casado,
+        })
+    return responder({"falhas": fotos})
+
+
+@app.get("/api/falha/{nome}")
+async def ver_foto_falha(nome: str, _: Morador):
+    """Serve uma imagem salva de falha de QR Code."""
+    if not re.match(r"^[\w.-]+\.(jpg|jpeg|png)$", nome, re.IGNORECASE):
+        raise HTTPException(400, "nome de arquivo inválido")
+    caminho = config().dados / "falhas" / nome
+    if not caminho.is_file():
+        raise HTTPException(404, "imagem não encontrada")
+    return FileResponse(caminho, media_type="image/jpeg")
 
 
 @app.get("/api/gastos")
