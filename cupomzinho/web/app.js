@@ -34,6 +34,70 @@ function aviso(texto, ruim) {
 }
 
 /* ── abas ─────────────────────────────────────────────────────────────────── */
+let modoMercadoAtivo = false;
+let wakeLockSentinela = null;
+
+async function ativarWakeLock() {
+  if ('wakeLock' in navigator) {
+    try {
+      wakeLockSentinela = await navigator.wakeLock.request('screen');
+      wakeLockSentinela.addEventListener('release', () => {
+        atualizarStatusWakeLock();
+      });
+      atualizarStatusWakeLock();
+    } catch (err) {
+      console.warn('Wake Lock não pôde ser ativado:', err);
+      atualizarStatusWakeLock();
+    }
+  }
+}
+
+async function desativarWakeLock() {
+  if (wakeLockSentinela) {
+    try {
+      await wakeLockSentinela.release();
+    } catch (_) {}
+    wakeLockSentinela = null;
+    atualizarStatusWakeLock();
+  }
+}
+
+function atualizarStatusWakeLock() {
+  const badge = $('#mercado-status-wake');
+  if (!badge) return;
+  if (wakeLockSentinela && !wakeLockSentinela.released) {
+    badge.textContent = '💡 Tela acesa';
+    badge.className = 'badge-mercado ativo';
+    badge.hidden = false;
+  } else if ('wakeLock' in navigator) {
+    badge.textContent = '💡 Tela normal';
+    badge.className = 'badge-mercado';
+    badge.hidden = false;
+  } else {
+    badge.hidden = true;
+  }
+}
+
+function atualizarStatusRede() {
+  const badge = $('#mercado-status-rede');
+  const online = navigator.onLine;
+  if (badge) {
+    badge.hidden = online;
+    if (!online) {
+      badge.textContent = '⚠️ Offline (Tailnet)';
+    }
+  }
+}
+
+window.addEventListener('online', atualizarStatusRede);
+window.addEventListener('offline', atualizarStatusRede);
+
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && modoMercadoAtivo && !$('#aba-lista').hidden) {
+    await ativarWakeLock();
+  }
+});
+
 const carregadores = {};
 function mudarAba(nome) {
   document.querySelectorAll('#abas button').forEach((b) => b.classList.toggle('ativa', b.dataset.aba === nome));
@@ -41,6 +105,11 @@ function mudarAba(nome) {
     const el = $('#aba-' + n);
     if (el) el.hidden = n !== nome;
   });
+  if (nome !== 'lista' && modoMercadoAtivo) {
+    desativarWakeLock();
+  } else if (nome === 'lista' && modoMercadoAtivo) {
+    ativarWakeLock();
+  }
   carregadores[nome]?.();
 }
 window.mudarAba = mudarAba;
@@ -516,12 +585,15 @@ carregadores.lista = async () => {
   } else {
     if (!listas.some((l) => l.id === listaAtual)) listaAtual = listas[0].id;
     $('#lista-cabeca').innerHTML = `
-      <div class="linha">
-        <select id="qual-lista" onchange="listaAtual=Number(this.value);carregadores.lista()">
+      <div class="linha" style="align-items:center;flex-wrap:wrap;gap:.5rem">
+        <select id="qual-lista" style="flex:1;min-width:140px" onchange="listaAtual=Number(this.value);carregadores.lista()">
           ${listas.map((l) => `<option value="${l.id}" ${l.id === listaAtual ? 'selected' : ''}>
             ${l.nome} (${l.itens})</option>`).join('')}
         </select>
         <button class="acao" onclick="novaLista()">nova</button>
+        <button type="button" id="btn-modo-mercado" class="btn-modo-mercado" onclick="alternarModoMercado()">
+          ${modoMercadoAtivo ? '✓ No Mercado' : '🛒 No Mercado'}
+        </button>
       </div>`;
     await desenharLista();
   }
@@ -541,41 +613,185 @@ const _itensListaMap = {};
 const _debounceQtd = {};
 
 async function desenharLista() {
+  const painelMercado = $('#mercado-painel');
+  const secaoSugestoes = $('#secao-sugestoes');
+  const listaAcao = $('#lista-acao');
+  const listaComparacao = $('#lista-comparacao');
+
   const { itens, comparacao } = await api('/api/lista/' + listaAtual);
   for (const k in _itensListaMap) delete _itensListaMap[k];
   itens.forEach((i) => { _itensListaMap[i.produto_id] = i; });
 
-  $('#lista-itens').innerHTML = itens.length
-    ? itens.map((i) => {
-        const granel = Boolean(i.is_granel);
-        const passo = granel ? 0.25 : 1;
-        const sufixo = granel ? ' kg' : '';
-        const rotuloQtd = `${quantia(i.quantidade)}${sufixo}`;
-        return `
-        <div class="item-lista-linha" id="item-lista-${i.produto_id}">
-          <div class="item-lista-info">
-            <div><strong>${i.descricao}</strong></div>
-            <div class="fraca">
-              ${granel ? '<span class="selo">⚖️ Granel</span> ' : ''}
-              ${i.gtin ? '<span class="selo">código de barras</span> ' : ''}
-              <span class="clicavel fraca" style="margin-left:.4rem;text-decoration:underline" onclick="tirarDaLista(${i.produto_id})">remover</span>
-            </div>
+  if (modoMercadoAtivo) {
+    if (painelMercado) painelMercado.hidden = false;
+    if (secaoSugestoes) secaoSugestoes.hidden = true;
+    if (listaAcao) listaAcao.hidden = true;
+    if (listaComparacao) listaComparacao.hidden = true;
+
+    const chaveStorage = 'cupomzinho_carrinho_' + listaAtual;
+    let carrinhoArr = [];
+    try {
+      carrinhoArr = JSON.parse(localStorage.getItem(chaveStorage) || '[]');
+    } catch (_) {}
+    const carrinhoIds = new Set(carrinhoArr);
+
+    const aPegar = itens.filter((i) => !carrinhoIds.has(i.produto_id));
+    const noCarrinho = itens.filter((i) => carrinhoIds.has(i.produto_id));
+
+    const totalEstimadoCarrinho = noCarrinho.reduce((acc, i) =>
+      acc + (Number(i.quantidade) * Number(i.ultimo_preco || 0)), 0);
+    const pct = itens.length ? Math.round((noCarrinho.length / itens.length) * 100) : 0;
+
+    if (painelMercado) {
+      painelMercado.innerHTML = `
+        <div class="mercado-header">
+          <div class="mercado-totalizador">
+            Carrinho: <strong>${noCarrinho.length}</strong> de <strong>${itens.length}</strong> itens · <strong>${dinheiro(totalEstimadoCarrinho)}</strong> estimados
           </div>
-          <div class="stepper">
-            <button type="button" class="btn-step" onclick="passoQtd(${i.produto_id}, -${passo})" aria-label="Diminuir">−</button>
-            <button type="button" class="btn-qtd-chip" onclick="abrirAjusteQtd(${i.produto_id})" id="chip-qtd-${i.produto_id}" title="Ajustar quantidade">${rotuloQtd}</button>
-            <button type="button" class="btn-step" onclick="passoQtd(${i.produto_id}, +${passo})" aria-label="Aumentar">+</button>
+          <div class="mercado-status-badges">
+            <span id="mercado-status-wake" class="badge-mercado"></span>
+            <span id="mercado-status-rede" class="badge-mercado alerta" hidden>⚠️ Offline</span>
+            <button type="button" class="btn-sair-mercado" onclick="alternarModoMercado()">Sair</button>
           </div>
+        </div>
+        <div class="barra-progresso-fundo">
+          <div id="mercado-barra-progresso" class="barra-progresso-preenchimento" style="width:${pct}%"></div>
         </div>`;
-      }).join('')
-    : '<div class="fraca">Lista vazia. Escolha abaixo o que a casa costuma comprar.</div>';
-  $('#lista-acao').innerHTML = itens.length ? `
-    <button class="acao" style="width:100%;margin-top:.8rem" onclick="pesquisarPrecos()">
-      Pesquisar preços na região</button>
-    <p class="dica">Consulta o Menor Preço do Paraná, um item por vez. Só acontece
-      quando você aperta — a app nunca consulta sozinha.</p>` : '';
-  desenharComparacao(comparacao);
+    }
+    atualizarStatusWakeLock();
+    atualizarStatusRede();
+
+    if (!itens.length) {
+      $('#lista-itens').innerHTML = '<div class="fraca">Sua lista está vazia. Adicione itens antes de ir às compras!</div>';
+      return;
+    }
+
+    let html = '';
+    if (aPegar.length) {
+      html += `<div class="mercado-secao-titulo">A PEGAR (${aPegar.length})</div>`;
+      html += aPegar.map((i) => {
+        const granel = Boolean(i.is_granel);
+        const precoEst = i.ultimo_preco ? dinheiro(Number(i.quantidade) * Number(i.ultimo_preco)) : null;
+        return `
+          <div class="cartao-mercado" onclick="toggleItemCarrinho(${i.produto_id})" role="checkbox" aria-checked="false">
+            <div class="check-circulo" aria-hidden="true"></div>
+            <div class="cartao-mercado-corpo">
+              <div class="cartao-mercado-nome">${i.descricao}</div>
+              <div class="cartao-mercado-meta">
+                <span class="chip-mercado-qtd">${quantia(i.quantidade)}${granel ? ' kg' : ' un'}</span>
+                ${granel ? '<span class="selo">⚖️ Granel</span> ' : ''}
+                ${precoEst ? `<span class="cartao-mercado-preco">~${precoEst}</span>` : ''}
+              </div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    if (noCarrinho.length) {
+      html += `
+        <div class="mercado-secao-titulo" style="margin-top:1.4rem">
+          <span>NO CARRINHO (${noCarrinho.length})</span>
+          <button type="button" class="clicavel fraca" style="background:none;border:0;text-decoration:underline;cursor:pointer" onclick="limparCarrinho()">desmarcar todos</button>
+        </div>`;
+      html += noCarrinho.map((i) => {
+        const granel = Boolean(i.is_granel);
+        const precoEst = i.ultimo_preco ? dinheiro(Number(i.quantidade) * Number(i.ultimo_preco)) : null;
+        return `
+          <div class="cartao-mercado marcado" onclick="toggleItemCarrinho(${i.produto_id})" role="checkbox" aria-checked="true">
+            <div class="check-circulo checado" aria-hidden="true">✓</div>
+            <div class="cartao-mercado-corpo">
+              <div class="cartao-mercado-nome">${i.descricao}</div>
+              <div class="cartao-mercado-meta">
+                <span class="chip-mercado-qtd">${quantia(i.quantidade)}${granel ? ' kg' : ' un'}</span>
+                ${granel ? '<span class="selo">⚖️ Granel</span> ' : ''}
+                ${precoEst ? `<span class="cartao-mercado-preco">~${precoEst}</span>` : ''}
+              </div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    $('#lista-itens').innerHTML = html;
+  } else {
+    if (painelMercado) {
+      painelMercado.hidden = true;
+      painelMercado.innerHTML = '';
+    }
+    if (secaoSugestoes) secaoSugestoes.hidden = false;
+    if (listaAcao) listaAcao.hidden = false;
+    if (listaComparacao) listaComparacao.hidden = false;
+
+    $('#lista-itens').innerHTML = itens.length
+      ? itens.map((i) => {
+          const granel = Boolean(i.is_granel);
+          const passo = granel ? 0.25 : 1;
+          const sufixo = granel ? ' kg' : '';
+          const rotuloQtd = `${quantia(i.quantidade)}${sufixo}`;
+          return `
+          <div class="item-lista-linha" id="item-lista-${i.produto_id}">
+            <div class="item-lista-info">
+              <div><strong>${i.descricao}</strong></div>
+              <div class="fraca">
+                ${granel ? '<span class="selo">⚖️ Granel</span> ' : ''}
+                ${i.gtin ? '<span class="selo">código de barras</span> ' : ''}
+                <span class="clicavel fraca" style="margin-left:.4rem;text-decoration:underline" onclick="tirarDaLista(${i.produto_id})">remover</span>
+              </div>
+            </div>
+            <div class="stepper">
+              <button type="button" class="btn-step" onclick="passoQtd(${i.produto_id}, -${passo})" aria-label="Diminuir">−</button>
+              <button type="button" class="btn-qtd-chip" onclick="abrirAjusteQtd(${i.produto_id})" id="chip-qtd-${i.produto_id}" title="Ajustar quantidade">${rotuloQtd}</button>
+              <button type="button" class="btn-step" onclick="passoQtd(${i.produto_id}, +${passo})" aria-label="Aumentar">+</button>
+            </div>
+          </div>`;
+        }).join('')
+      : '<div class="fraca">Lista vazia. Escolha abaixo o que a casa costuma comprar.</div>';
+    if (listaAcao) {
+      listaAcao.innerHTML = itens.length ? `
+        <button class="acao" style="width:100%;margin-top:.8rem" onclick="pesquisarPrecos()">
+          Pesquisar preços na região</button>
+        <p class="dica">Consulta o Menor Preço do Paraná, um item por vez. Só acontece
+          quando você aperta — a app nunca consulta sozinha.</p>` : '';
+    }
+    desenharComparacao(comparacao);
+  }
 }
+
+window.alternarModoMercado = async () => {
+  modoMercadoAtivo = !modoMercadoAtivo;
+  if (modoMercadoAtivo) {
+    await ativarWakeLock();
+  } else {
+    await desativarWakeLock();
+  }
+  const btn = $('#btn-modo-mercado');
+  if (btn) btn.innerHTML = modoMercadoAtivo ? '✓ No Mercado' : '🛒 No Mercado';
+  await desenharLista();
+};
+
+window.toggleItemCarrinho = (produto_id) => {
+  const chaveStorage = 'cupomzinho_carrinho_' + listaAtual;
+  let carrinhoArr = [];
+  try {
+    carrinhoArr = JSON.parse(localStorage.getItem(chaveStorage) || '[]');
+  } catch (_) {}
+  const carrinhoIds = new Set(carrinhoArr);
+  if (carrinhoIds.has(produto_id)) {
+    carrinhoIds.delete(produto_id);
+    navigator.vibrate?.(15);
+  } else {
+    carrinhoIds.add(produto_id);
+    navigator.vibrate?.(25);
+  }
+  localStorage.setItem(chaveStorage, JSON.stringify([...carrinhoIds]));
+  desenharLista();
+};
+
+window.limparCarrinho = () => {
+  if (!confirm('Desmarcar todos os itens do carrinho?')) return;
+  const chaveStorage = 'cupomzinho_carrinho_' + listaAtual;
+  localStorage.removeItem(chaveStorage);
+  desenharLista();
+};
 
 window.passoQtd = (produto_id, delta) => {
   const item = _itensListaMap[produto_id];
@@ -713,6 +929,12 @@ window.porNaLista = async (produto_id) => {
 };
 
 window.tirarDaLista = async (produto_id) => {
+  const chaveStorage = 'cupomzinho_carrinho_' + listaAtual;
+  try {
+    let carrinhoArr = JSON.parse(localStorage.getItem(chaveStorage) || '[]');
+    carrinhoArr = carrinhoArr.filter((id) => id !== produto_id);
+    localStorage.setItem(chaveStorage, JSON.stringify(carrinhoArr));
+  } catch (_) {}
   await api(`/api/lista/${listaAtual}/item/${produto_id}`, { method: 'DELETE' });
   desenharLista();
 };

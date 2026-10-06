@@ -53,6 +53,8 @@ def test_criar_e_montar_lista(con):
     guardados = itens(con, lista)
     assert len(guardados) == 1
     assert guardados[0]["quantidade"] == Decimal("2.000")
+    assert guardados[0]["ultimo_preco"] is not None
+    assert guardados[0]["ultimo_preco"] > Decimal("0")
 
     por_produto(con, lista, atum, Decimal("3"))     # de novo: atualiza, não duplica
     assert itens(con, lista)[0]["quantidade"] == Decimal("3.000")
