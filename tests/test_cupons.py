@@ -245,3 +245,40 @@ def test_sped_completo_grava_e_enriquece_gtin_no_banco(con):
     assert maca["ncm"] == "08081000"
     assert maca["is_granel"] == 1
 
+
+def test_garantir_estabelecimento_ignora_cnpj_vazio(con):
+    """Garante que estabelecimentos com CNPJ vazio ou só espaços não são gravados."""
+    from cupomzinho.cupons import _garantir_estabelecimento
+    from cupomzinho.nfce_pr import Estabelecimento
+
+    e_vazio = Estabelecimento(cnpj="", razao="Loja Sem CNPJ")
+    _garantir_estabelecimento(con, e_vazio)
+    assert con.execute("SELECT COUNT(*) FROM estabelecimento WHERE cnpj = ''").fetchone()[0] == 0
+
+    e_espacos = Estabelecimento(cnpj="   ", razao="Loja Espaços")
+    _garantir_estabelecimento(con, e_espacos)
+    assert con.execute("SELECT COUNT(*) FROM estabelecimento WHERE cnpj = '   '").fetchone()[0] == 0
+
+
+def test_gravar_cupom_sem_cnpj_nao_grava_preco(con):
+    """Garante que cupons com estabelecimento sem CNPJ não violam integridade."""
+    import sqlite3
+    from decimal import Decimal
+
+    from cupomzinho.cupons import gravar
+    from cupomzinho.nfce_pr import Cupom, Estabelecimento, Item
+
+    cupom = Cupom(
+        chave="41260877752293016191651170001637541131086428",
+        estabelecimento=Estabelecimento(cnpj="", razao="Sem CNPJ"),
+        itens=[Item(seq=1, descricao="ITEM TESTE", codigo_loja="123",
+                    quantidade=Decimal("1"), unidade="UN",
+                    valor_unitario=Decimal("10.00"), valor_total=Decimal("10.00"))],
+        total=Decimal("10.00"),
+        valor_pago=Decimal("10.00"),
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        gravar(con, cupom, morador="Miguel")
+    assert con.execute("SELECT COUNT(*) FROM preco WHERE TRIM(cnpj) = ''").fetchone()[0] == 0
+
+

@@ -43,6 +43,39 @@ class LayoutDesconhecido(Exception):
     """Veio HTML que o parser não reconhece. O cru fica em disco para virar fixture."""
 
 
+class ErroSefaz(Exception):
+    """A SEFAZ retornou uma página de erro (ex: flashMessage, URL mal formatada)."""
+
+
+def _checar_erro_sefaz(html: str, sopa: BeautifulSoup | None = None) -> None:
+    """Detecta páginas de erro HTML servidas pela SEFAZ em vez do cupom."""
+    if not html:
+        return
+    baixo = html.lower()
+    if (
+        "flashmessage" in baixo
+        or "não foi possível executar a operação" in baixo
+        or "nao foi possivel executar a operacao" in baixo
+        or "url do qrcode mal formatad" in baixo
+    ):
+        if sopa is None:
+            sopa = BeautifulSoup(html, "lxml")
+        flash = sopa.select_one("#flashMessage, .flashMessage")
+        msg = _limpar(flash.get_text()) if flash else ""
+        if not msg:
+            for padrao in (
+                "não foi possível executar a operação",
+                "nao foi possivel executar a operacao",
+                "url do qrcode mal formatad",
+            ):
+                idx = baixo.find(padrao)
+                if idx != -1:
+                    trecho = html[idx:idx + 160].split("<")[0]
+                    msg = _limpar(trecho)
+                    break
+        raise ErroSefaz(msg or "Não foi possível executar a operação no portal da SEFAZ")
+
+
 # ── o que sai daqui ──────────────────────────────────────────────────────────
 @dataclass
 class Estabelecimento:
@@ -135,7 +168,7 @@ def chave_da_url(url: str) -> str | None:
     O `p` é uma lista separada por barra vertical: chave|versão|ambiente|...
     Aceita também a chave crua, com ou sem os espaços com que a página a exibe.
     """
-    bruto = url.strip()
+    bruto = (url or "").strip().lstrip("\ufeff").strip()
     if "?" in bruto or bruto.startswith("http"):
         p = parse_qs(urlparse(bruto).query).get("p", [""])[0]
         bruto = p.split("|")[0]
@@ -558,6 +591,7 @@ def _ler_sped_completo(sopa, chave: str, avisos: list[str]) -> Cupom:
 def interpretar(html: str) -> Cupom:
     """HTML da consulta pública (DANFE QR ou SPED Completo) -> Cupom. Pura: não toca a rede."""
     sopa = BeautifulSoup(html, "lxml")
+    _checar_erro_sefaz(html, sopa)
     avisos: list[str] = []
 
     span_chave = sopa.select_one("span.chave")
@@ -601,9 +635,11 @@ def buscar(url_ou_chave: str, tempo_limite: int = 30) -> str:
     """
     import httpx
 
-    url = url_ou_chave if url_ou_chave.startswith("http") else f"{CONSULTA}?p={url_ou_chave}"
+    limpo = (url_ou_chave or "").strip().lstrip("\ufeff").strip()
+    url = limpo if limpo.startswith("http") else f"{CONSULTA}?p={limpo}"
     resposta = httpx.get(url, timeout=tempo_limite, follow_redirects=True)
     resposta.raise_for_status()
+    _checar_erro_sefaz(resposta.text)
     return resposta.text
 
 

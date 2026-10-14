@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 
 from cupomzinho.nfce_pr import (
+    ErroSefaz,
+    buscar,
     chave_da_url,
     dados_da_chave,
     interpretar,
@@ -287,3 +289,83 @@ def test_dados_da_chave_dizem_loja_mes_e_numero():
     assert dados["cnpj"] == "77752293016191"
     assert dados["modelo"] == "65"                   # NFC-e
     assert (dados["serie"], dados["numero"]) == ("117", "163754")
+
+
+def test_chave_da_url_higieniza_bom():
+    """Garante que BOM (\ufeff) e espaços antes ou depois da URL/chave são limpos."""
+    com_bom = "\ufeff" + URL_QR
+    assert chave_da_url(com_bom) == "41260877752293016191651170001637541131086428"
+
+    chave_com_bom = " \ufeff " + CHAVE + " "
+    assert chave_da_url(chave_com_bom) == CHAVE
+
+
+def test_buscar_higieniza_bom(monkeypatch):
+    """buscar() deve remover BOM antes de disparar a requisição HTTP."""
+    chamadas = []
+
+    class RespostaMock:
+        text = "<html>ok</html>"
+        def raise_for_status(self):
+            pass
+
+    def mock_get(url, **kwargs):
+        chamadas.append(url)
+        return RespostaMock()
+
+    import httpx
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    buscar("\ufeff" + URL_QR)
+    assert chamadas == [URL_QR]
+
+
+def test_interpretar_pagina_erro_sefaz():
+    """HTML de erro da SEFAZ com flashMessage ou mensagem de falha levanta ErroSefaz."""
+    html_flash = """
+    <html><body>
+        <div id="flashMessage">
+            Atenção. Não foi possível executar a operação: Url do QRCode mal formatado
+        </div>
+    </body></html>
+    """
+    with pytest.raises(ErroSefaz, match="Url do QRCode mal formatado"):
+        interpretar(html_flash)
+
+    html_sem_id = "<html><body>Não foi possível executar a operação</body></html>"
+    with pytest.raises(ErroSefaz, match="Não foi possível executar a operação"):
+        interpretar(html_sem_id)
+
+
+def test_buscar_pagina_erro_sefaz(monkeypatch):
+    """buscar() deve levantar ErroSefaz se a resposta contiver página de erro."""
+    class RespostaErroMock:
+        text = '<div id="flashMessage">Erro na SEFAZ</div>'
+        def raise_for_status(self):
+            pass
+
+    import httpx
+    monkeypatch.setattr(httpx, "get", lambda url, **kwargs: RespostaErroMock())
+
+    with pytest.raises(ErroSefaz, match="Erro na SEFAZ"):
+        buscar(URL_QR)
+
+
+def test_interpretar_pagina_erro_sefaz_variacoes():
+    """Variações de caixa, sem acento ou classe flashMessage também levantam ErroSefaz."""
+    # Minúsculas
+    with pytest.raises(ErroSefaz, match="não foi possível executar a operação"):
+        interpretar("<html><body>não foi possível executar a operação: falha interna</body></html>")
+
+    # Sem acento
+    with pytest.raises(ErroSefaz, match="Nao foi possivel executar a operacao"):
+        interpretar("<html><body>Atenção: Nao foi possivel executar a operacao</body></html>")
+
+    # Classe .flashMessage
+    with pytest.raises(ErroSefaz, match="Erro no portal"):
+        interpretar('<html><body><div class="flashMessage">Erro no portal</div></body></html>')
+
+    # Erro de QRCode mal formatado
+    with pytest.raises(ErroSefaz, match="Url do QRCode mal formatad"):
+        interpretar('<html><body>Aviso: Url do QRCode mal formatada</body></html>')
+

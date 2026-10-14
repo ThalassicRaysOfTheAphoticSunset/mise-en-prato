@@ -50,6 +50,7 @@ from .consulta_chave import (
 from .identidade import NaoIdentificado, quem_e
 from .nfce_pr import (
     Cupom,
+    ErroSefaz,
     Estabelecimento,
     buscar,
     chave_da_url,
@@ -218,11 +219,13 @@ def _chave_valida(bruta: str) -> str:
 
 def _registrar(con, url: str, quem: str, origem: str) -> dict:
     """Busca pela URL do QR, interpreta e grava. Idempotente pela chave."""
+    url = (url or "").strip().lstrip("\ufeff").strip()
     chave = chave_da_url(url)
     if not chave:
         raise HTTPException(400, "não encontrei uma chave de acesso de 44 dígitos nesse link")
 
-    if (guardado := _ja_guardado(con, chave)):
+    guardado = _ja_guardado(con, chave)
+    if guardado and guardado.get("cupom") and guardado["cupom"].get("completo"):
         return guardado
 
     try:
@@ -239,7 +242,8 @@ async def enviar_cupom(envio: EnvioCupom, quem: Morador, con: Banco):
     if envio.url:
         return responder(_registrar(con, envio.url, quem, "qrcode"))
     if envio.chave:
-        guardado = cupons.ler(con, envio.chave.replace(" ", ""))
+        chave_limpa = (envio.chave or "").strip().lstrip("\ufeff").replace(" ", "")
+        guardado = cupons.ler(con, chave_limpa)
         if not guardado:
             raise HTTPException(
                 404,
@@ -470,17 +474,22 @@ def enviar_chave(envio: EnvioChave, quem: Morador, con: Banco):
     except Exception as erro:
         raise HTTPException(502, f"a SEFAZ não respondeu: {erro}") from erro
 
-    _guardar_html(chave, html)
     try:
         cupom = interpretar_resposta(html)
+    except ErroSefaz as erro:
+        raise HTTPException(502, f"a SEFAZ não respondeu: {erro}") from erro
     except LayoutDesconhecido:
         # O HTML cru já está em disco: é dele que sai a fixture que ensina o
         # parser a ler esta tela. Até lá o cupom entra pela metade, não se perde.
+        _guardar_html(chave, html)
         log.warning("consulta completa em layout desconhecido; HTML guardado para a chave %s",
                     chave)
         cupom = _cupom_da_chave(
             con, chave, avisos=["a consulta completa veio num layout que ainda não sei ler; "
                                 "o cupom entrou sem os itens"])
+        return responder(_gravar(con, chave, cupom, quem, "chave"))
+
+    _guardar_html(chave, html)
     return responder(_gravar(con, chave, cupom, quem, "chave"))
 
 

@@ -153,3 +153,20 @@ def test_sem_o_zxing_a_escada_continua_de_pé(monkeypatch):
 
     monkeypatch.setattr(modulo, "DECODIFICADORES", _so({"zbar"}))
     assert ler_qr(_bytes(_qr())) == [URL_QR]
+
+
+def test_qr_com_bom_utf8():
+    """QR Code cujo conteúdo vem precedido por BOM UTF-8 (\ufeff)."""
+    conteudo_com_bom = "\ufeff" + URL_QR
+    assert ler_qr(_bytes(_qr(conteudo=conteudo_com_bom))) == [URL_QR]
+
+
+def test_decodificadores_limpam_bom():
+    """Garante que tanto zbar quanto zxing limpam BOM diretamente."""
+    from cupomzinho.qr import _por_zbar, _por_zxing, zxingcpp
+
+    conteudo_com_bom = "\ufeff" + URL_QR
+    imagem = _qr(conteudo=conteudo_com_bom)
+    assert _por_zbar(imagem) == [URL_QR]
+    if zxingcpp:
+        assert _por_zxing(imagem) == [URL_QR]

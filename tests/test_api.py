@@ -3,11 +3,13 @@
 Nenhum teste aqui toca a rede: o cupom entra pela camada de gravação, e o que
 se exercita são as rotas de leitura, a serialização e o portão de identidade.
 """
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from cupomzinho import cupons
 from cupomzinho.cupons import gravar
 from cupomzinho.nfce_pr import interpretar
 
@@ -510,6 +512,84 @@ def test_gerenciar_variantes_api(cliente):
     assert r_del.status_code == 200
     r_depois = cliente.get(f"/api/produto/{pid}/variantes")
     assert len(r_depois.json()["variantes"]) == 1
+
+
+def test_registrar_atualiza_cupom_incompleto(tmp_path, monkeypatch):
+    """Se o cupom já existe no banco mas incompleto, registrar via URL busca e atualiza."""
+    from cupomzinho.config import config
+    from cupomzinho.nfce_pr import Cupom, Estabelecimento
+
+    with TestClient(_app(tmp_path, monkeypatch, exigir_tailnet=False)) as c:
+        con = c.app.state.con
+        chave = interpretar(FIXTURE.read_text(encoding="utf-8")).chave
+        incompleto = Cupom(
+            chave=chave,
+            estabelecimento=Estabelecimento(cnpj="77752293016191", razao="LAR TESTE"),
+            total=Decimal("50.00"),
+            valor_pago=Decimal("50.00"),
+            avisos=["cupom incompleto de teste"],
+        )
+        gravar(con, incompleto, morador="Miguel")
+        guardado_antes = cupons.ler(con, chave)
+        assert guardado_antes["completo"] is False
+
+        html_valido = FIXTURE.read_text(encoding="utf-8")
+        monkeypatch.setattr("cupomzinho.main.buscar", lambda url: html_valido)
+
+        url = f"https://www.fazenda.pr.gov.br/nfce/qrcode?p={chave}|2|1|1|HASH"
+        r = c.post("/api/cupom", json={"url": url})
+        assert r.status_code == 200
+        res = r.json()
+        assert res["novo"] is True
+        assert res["cupom"]["completo"] is True
+        assert len(res["cupom"]["itens"]) == 16
+    config.cache_clear()
+
+
+def test_enviar_chave_reconsultar_atualiza(cliente, portal):
+    """Com reconsultar=True, enviar_chave refaz a consulta no portal mesmo já guardado."""
+    chave = _com_dv(CHAVE_NOVA)
+    cliente.post("/api/cupom/chave", json={
+        "chave": chave, "desafio": _pegar_desafio(cliente), "captcha": "certo"})
+    portal.clear()
+
+    desafio = _pegar_desafio(cliente)
+    r = cliente.post("/api/cupom/chave", json={
+        "chave": chave, "desafio": desafio, "captcha": "certo", "reconsultar": True})
+    assert r.status_code == 200
+    assert portal == [(chave, "certo")]
+
+
+def test_enviar_cupom_chave_com_bom(cliente):
+    """POST /api/cupom com {"chave": "\ufeff..."} deve encontrar o cupom existente."""
+    chave = cliente.get("/api/cupons").json()["cupons"][0]["chave"]
+    r = cliente.post("/api/cupom", json={"chave": "\ufeff" + chave})
+    assert r.status_code == 200
+    assert r.json()["novo"] is False
+    assert r.json()["cupom"]["chave"] == chave
+
+
+def test_registrar_higieniza_url_qr_no_banco(tmp_path, monkeypatch):
+    """Garante que URL com BOM tem o BOM removido ao ser gravada em url_qr no banco."""
+    from cupomzinho.config import config
+
+    with TestClient(_app(tmp_path, monkeypatch, exigir_tailnet=False)) as c:
+        con = c.app.state.con
+        chave = interpretar(FIXTURE.read_text(encoding="utf-8")).chave
+        html_valido = FIXTURE.read_text(encoding="utf-8")
+        monkeypatch.setattr("cupomzinho.main.buscar", lambda url: html_valido)
+
+        url_pura = f"https://www.fazenda.pr.gov.br/nfce/qrcode?p={chave}|2|1|1|HASH"
+        url_com_bom = "\ufeff" + url_pura
+        r = c.post("/api/cupom", json={"url": url_com_bom})
+        assert r.status_code == 200
+        url_no_banco = con.execute(
+            "SELECT url_qr FROM cupom WHERE chave = ?", (chave,)
+        ).fetchone()[0]
+        assert url_no_banco == url_pura
+        assert not url_no_banco.startswith("\ufeff")
+    config.cache_clear()
+
 
 
 

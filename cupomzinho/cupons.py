@@ -50,6 +50,8 @@ def existe(con: sqlite3.Connection, chave: str) -> bool:
 
 
 def _garantir_estabelecimento(con: sqlite3.Connection, e) -> None:
+    if not e or not getattr(e, "cnpj", None) or not e.cnpj.strip():
+        return
     con.execute(
         """INSERT INTO estabelecimento (cnpj, razao, logradouro, numero, complemento,
                                         bairro, municipio, uf)
@@ -261,13 +263,15 @@ def gravar(con: sqlite3.Connection, cupom: Cupom, *, morador: str,
                         (item.gtin, item.ncm, produto_id),
                     )
                 _tentar_enriquecimento_local(con, produto_id)
-                con.execute(
-                    """INSERT OR IGNORE INTO preco
-                           (produto_id, cnpj, unitario_centavos, observado_em, fonte)
-                       VALUES (?,?,?,?,'cupom')""",
-                    (produto_id, cupom.estabelecimento.cnpj, centavos(item.valor_unitario),
-                     cupom.emitido_em.isoformat(sep=" ") if cupom.emitido_em else None),
-                )
+                e = cupom.estabelecimento
+                if e and getattr(e, "cnpj", None) and e.cnpj.strip():
+                    con.execute(
+                        """INSERT OR IGNORE INTO preco
+                               (produto_id, cnpj, unitario_centavos, observado_em, fonte)
+                           VALUES (?,?,?,?,'cupom')""",
+                        (produto_id, e.cnpj, centavos(item.valor_unitario),
+                         cupom.emitido_em.isoformat(sep=" ") if cupom.emitido_em else None),
+                    )
         return True
 
     with con:  # transação: ou entra o cupom todo, ou não entra nada
@@ -317,13 +321,15 @@ def gravar(con: sqlite3.Connection, cupom: Cupom, *, morador: str,
             # O preço pago entra na MESMA série que o Menor Preço alimenta.
             # OR IGNORE porque duas linhas idênticas do mesmo cupom (o atum
             # comprado duas vezes) são uma observação de preço só.
-            con.execute(
-                """INSERT OR IGNORE INTO preco
-                       (produto_id, cnpj, unitario_centavos, observado_em, fonte)
-                   VALUES (?,?,?,?,'cupom')""",
-                (produto_id, cupom.estabelecimento.cnpj, centavos(item.valor_unitario),
-                 cupom.emitido_em.isoformat(sep=" ") if cupom.emitido_em else None),
-            )
+            e = cupom.estabelecimento
+            if e and getattr(e, "cnpj", None) and e.cnpj.strip():
+                con.execute(
+                    """INSERT OR IGNORE INTO preco
+                           (produto_id, cnpj, unitario_centavos, observado_em, fonte)
+                       VALUES (?,?,?,?,'cupom')""",
+                    (produto_id, e.cnpj, centavos(item.valor_unitario),
+                     cupom.emitido_em.isoformat(sep=" ") if cupom.emitido_em else None),
+                )
     return True
 
 

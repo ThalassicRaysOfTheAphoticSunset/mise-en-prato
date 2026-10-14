@@ -121,13 +121,18 @@ def _tentativas(imagem: Image.Image):
     yield "com margem", ImageOps.expand(alvo, border=MARGEM, fill=255)
 
 
+def _limpar_qr(texto: str) -> str:
+    """Remove BOM UTF-8 (\ufeff) e espaços das extremidades."""
+    return (texto or "").strip().lstrip("\ufeff").strip()
+
+
 def _por_zbar(imagem: Image.Image) -> list[str]:
-    return [c.data.decode("utf-8", "replace")
+    return [_limpar_qr(c.data.decode("utf-8", "replace"))
             for c in decode(imagem, symbols=[ZBarSymbol.QRCODE])]
 
 
 def _por_zxing(imagem: Image.Image) -> list[str]:
-    return [r.text for r in zxingcpp.read_barcodes(
+    return [_limpar_qr(r.text) for r in zxingcpp.read_barcodes(
         imagem, formats=zxingcpp.BarcodeFormat.QRCode)]
 
 
@@ -154,9 +159,10 @@ def ler_qr(dados: bytes) -> list[str]:
         for decodificador, ler in DECODIFICADORES:
             achados = ler(variante)
             if achados:
+                limpos = [_limpar_qr(a) for a in achados]
                 log.info("QR achado por %s na tentativa '%s' (%d código(s))",
-                         decodificador, nome, len(achados))
-                return achados
+                         decodificador, nome, len(limpos))
+                return limpos
         log.debug("tentativa '%s': nada", nome)
 
     log.info("nenhum QR Code em nenhuma das tentativas")
