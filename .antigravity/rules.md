@@ -1,0 +1,1 @@
+Siga estritamente todas as instruções contidas em ../AGENTS.md
