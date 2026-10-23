@@ -10,23 +10,33 @@ Cobre todo o ciclo de vida:
 - Preservação da integridade das tabelas legadas do sistema.
 """
 
+import io
 import sqlite3
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from mise_en_prato.banco import conectar
 from mise_en_prato.receitas import (
     Ingrediente,
     Receita,
     adicionar_ingrediente,
+    atualizar_receita,
     buscar_receitas,
     criar_receita,
     escalar_receita,
     excluir_receita,
+    formatar_fracao_culinaria,
+    listar_categorias,
     listar_receitas,
     obter_receita,
+    parse_linha_ingrediente,
+    parse_texto_ingredientes,
+    remover_foto_receita,
     remover_ingrediente,
+    salvar_foto_receita,
 )
 
 
@@ -331,6 +341,160 @@ def test_indices_banco_criados(con):
     assert "idx_ingredientes_receita" in indices
     assert "idx_ingredientes_nome" in indices
     assert "idx_ingredientes_gtin" in indices
+    assert "idx_receitas_categoria" in indices
+
+
+def test_criar_e_filtrar_por_categoria(con):
+    criar_receita(con, nome="Brigadeiro", categoria="Sobremesa")
+    criar_receita(con, nome="Pudim de Leite", categoria="Sobremesa")
+    criar_receita(con, nome="Frango Grelhado", categoria="Almoço")
+
+    sobremesas = listar_receitas(con, categoria="Sobremesa")
+    assert len(sobremesas) == 2
+    assert all(r.categoria == "Sobremesa" for r in sobremesas)
+
+    almocos = listar_receitas(con, categoria="Almoço")
+    assert len(almocos) == 1
+    assert almocos[0].nome == "Frango Grelhado"
+
+    cats = listar_categorias(con)
+    assert cats == ["Almoço", "Sobremesa"]
+
+
+def test_atualizar_receita(con):
+    rec_id = criar_receita(
+        con,
+        nome="Sopa Simples",
+        porcoes=2,
+        ingredientes=[{"nome_ingrediente": "Batata", "quantidade": 2, "unidade": "unidade"}],
+    )
+
+    atualizada = atualizar_receita(
+        con,
+        receita_id=rec_id,
+        nome="Sopa Rica",
+        porcoes=4,
+        tempo_preparo_min=35,
+        instrucoes="Cozinhe tudo bem macio.",
+        categoria="Jantar",
+        ingredientes=[
+            {"nome_ingrediente": "Batata", "quantidade": 4, "unidade": "unidade"},
+            {"nome_ingrediente": "Cenoura", "quantidade": 2, "unidade": "unidade"},
+        ],
+    )
+
+    assert atualizada.nome == "Sopa Rica"
+    assert atualizada.porcoes == 4
+    assert atualizada.tempo_preparo_min == 35
+    assert atualizada.categoria == "Jantar"
+    assert len(atualizada.ingredientes) == 2
+    assert atualizada.ingredientes[1].nome_ingrediente == "Cenoura"
+
+
+def test_parser_ingredientes_linhas():
+    # Fração composta
+    p1 = parse_linha_ingrediente("1 1/2 xícara de farinha de trigo")
+    assert p1 is not None
+    assert p1["quantidade"] == Decimal("1.5")
+    assert p1["unidade"] == "xícara"
+    assert p1["nome_ingrediente"] == "farinha de trigo"
+
+    # Quantidade colada com unidade
+    p2 = parse_linha_ingrediente("500g de carne moída")
+    assert p2 is not None
+    assert p2["quantidade"] == Decimal("500")
+    assert p2["unidade"] == "g"
+    assert p2["nome_ingrediente"] == "carne moída"
+
+    # Unidades com fração simples e unicode
+    p3 = parse_linha_ingrediente("½ colher de sopa de açúcar")
+    assert p3 is not None
+    assert p3["quantidade"] == Decimal("0.5")
+    assert p3["unidade"] == "colher de sopa"
+    assert p3["nome_ingrediente"] == "açúcar"
+
+    # A gosto
+    p4 = parse_linha_ingrediente("Sal e pimenta a gosto")
+    assert p4 is not None
+    assert p4["unidade"] == "a gosto"
+    assert "Sal e pimenta" in p4["nome_ingrediente"]
+
+    # Marcador de lista com número inteiro
+    p5 = parse_linha_ingrediente("- 3 ovos caipiras")
+    assert p5 is not None
+    assert p5["quantidade"] == Decimal("3")
+    assert p5["unidade"] == "unidade"
+    assert p5["nome_ingrediente"] == "ovos caipiras"
+
+
+def test_parser_texto_completo():
+    texto = """
+    2 xícaras de leite
+    1/2 colher de chá de baunilha
+    3 ovos
+    Sal a gosto
+    """
+    itens = parse_texto_ingredientes(texto)
+    assert len(itens) == 4
+    assert itens[0]["nome_ingrediente"] == "leite"
+    assert itens[0]["quantidade"] == Decimal("2")
+    assert itens[1]["unidade"] == "colher de chá"
+    assert itens[2]["quantidade"] == Decimal("3")
+
+
+def test_formatar_fracoes_culinarias():
+    assert formatar_fracao_culinaria(Decimal("0.5")) == "½"
+    assert formatar_fracao_culinaria(Decimal("1.5")) == "1 ½"
+    assert formatar_fracao_culinaria(Decimal("0.25")) == "¼"
+    assert formatar_fracao_culinaria(Decimal("0.75")) == "¾"
+    assert formatar_fracao_culinaria(Decimal("2")) == "2"
+    assert formatar_fracao_culinaria(Decimal("250")) == "250"
+
+
+def test_salvar_e_remover_foto_receita(con, tmp_path):
+    pasta_fotos = tmp_path / "fotos_teste"
+    rec_id = criar_receita(con, nome="Bolo com Foto")
+
+    # Cria imagem sintética
+    img = Image.new("RGB", (300, 200), color=(200, 50, 50))
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG")
+    bytes_foto = buffer.getvalue()
+
+    foto_rel = salvar_foto_receita(con, pasta_fotos, rec_id, bytes_foto)
+    assert foto_rel.endswith(".webp")
+
+    # Verifica se arquivo existe no disco
+    arquivo_disco = pasta_fotos / Path(foto_rel).name
+    assert arquivo_disco.exists()
+    assert arquivo_disco.stat().st_size > 0
+
+    # Verifica se receita no banco aponta para a foto
+    rec_banco = obter_receita(con, rec_id)
+    assert rec_banco.foto_caminho == foto_rel
+
+    # Remove foto
+    sucesso = remover_foto_receita(con, pasta_fotos, rec_id)
+    assert sucesso is True
+    assert not arquivo_disco.exists()
+    assert obter_receita(con, rec_id).foto_caminho is None
+
+
+def test_excluir_receita_com_foto(con, tmp_path):
+    pasta_fotos = tmp_path / "fotos_teste2"
+    rec_id = criar_receita(con, nome="Receita Para Deletar com Foto")
+
+    img = Image.new("RGB", (100, 100), color="blue")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    salvar_foto_receita(con, pasta_fotos, rec_id, buf.getvalue())
+
+    assert len(list(pasta_fotos.glob("*.webp"))) == 1
+
+    # Exclui receita com limpeza de foto
+    excluir_receita(con, rec_id, pasta_fotos=pasta_fotos)
+    assert obter_receita(con, rec_id) is None
+    assert len(list(pasta_fotos.glob("*.webp"))) == 0
 
 
 def test_criar_receita_a_partir_de_objeto(con):

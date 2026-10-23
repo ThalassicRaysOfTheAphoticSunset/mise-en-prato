@@ -8,6 +8,7 @@ que chega já passou pelo Tailscale — falta apenas perguntar ao tailscaled que
 é. Ver identidade.py.
 """
 import asyncio
+import dataclasses
 import json
 import logging
 import re
@@ -30,6 +31,7 @@ from . import (
     enriquecimento,
     listas,
     menor_preco,
+    receitas,
     relatorios,
     sanidade,
     tarefas,
@@ -68,14 +70,18 @@ log = logging.getLogger("mise_en_prato.main")
 
 
 class Codificador(json.JSONEncoder):
-    """Decimal vira string no JSON, não float.
+    """Decimal vira string no JSON, não float. Dataclasses viram dicionários.
 
     Float aqui reintroduziria justamente o erro de centavo que o banco em
     inteiros existe para evitar; a tela formata a string como quiser.
     """
 
     def default(self, o):
-        return str(o) if isinstance(o, Decimal) else super().default(o)
+        if isinstance(o, Decimal):
+            return str(o)
+        if dataclasses.is_dataclass(o):
+            return dataclasses.asdict(o)
+        return super().default(o)
 
 
 class RespostaJSON(JSONResponse):
@@ -128,6 +134,7 @@ async def ciclo_de_vida(app: FastAPI):
     configurar_log()
     cfg.pasta_cupons.mkdir(parents=True, exist_ok=True)
     cfg.pasta_backups.mkdir(parents=True, exist_ok=True)
+    cfg.pasta_fotos_receitas.mkdir(parents=True, exist_ok=True)
     app.state.con = conectar(cfg.banco)
     # O backup vive no ciclo de vida do servidor: sobe junto, desce junto.
     app.state.tarefas = [
@@ -1358,6 +1365,260 @@ def enriquecer_produtos(request: Request, quantos: int = 5):
                                 "motivo": r["motivo"]})
     relatorio["restantes"] = len(enriquecimento.pendentes(con, 999))
     return responder(relatorio)
+
+
+# ── receitas e modo cozinha ──────────────────────────────────────────────────
+class IngredienteEntrada(BaseModel):
+    nome_ingrediente: str
+    quantidade: Decimal = Decimal("1")
+    unidade: str = "unidade"
+    gtin_associado: str | None = None
+
+
+class ReceitaEntrada(BaseModel):
+    nome: str
+    porcoes: int = 1
+    tempo_preparo_min: int | None = None
+    instrucoes: str | None = None
+    categoria: str | None = None
+    ingredientes: list[IngredienteEntrada] = []
+
+
+class EnviarIngredientesLista(BaseModel):
+    lista_id: int | None = None
+    nome_nova_lista: str | None = None
+    ingrediente_ids: list[int] = []
+
+
+class ParserIngredientesEntrada(BaseModel):
+    texto: str
+
+
+def _obter_ou_criar_produto_para_ingrediente(
+    con: sqlite3.Connection, nome: str, gtin: str | None = None
+) -> int:
+    if gtin:
+        row = con.execute("SELECT id FROM produto WHERE gtin = ? LIMIT 1", (gtin,)).fetchone()
+        if row:
+            return row["id"]
+    row = con.execute(
+        "SELECT id FROM produto WHERE UPPER(descricao_canonica) = UPPER(?) LIMIT 1",
+        (nome.strip(),),
+    ).fetchone()
+    if row:
+        return row["id"]
+    with con:
+        cur = con.execute(
+            "INSERT INTO produto (descricao_canonica, gtin, acompanhar) VALUES (?, ?, 0)",
+            (nome.strip().upper(), gtin),
+        )
+        return cur.lastrowid
+
+
+@app.get("/api/receitas")
+async def listar_todas_receitas(_: Morador, con: Banco, q: str = "", categoria: str = ""):
+    if q or categoria:
+        recs = receitas.buscar_receitas(con, q, categoria=categoria or None)
+    else:
+        recs = receitas.listar_receitas(con)
+    categorias = receitas.listar_categorias(con)
+    return responder({
+        "receitas": [
+            {
+                "id": r.id,
+                "nome": r.nome,
+                "porcoes": r.porcoes,
+                "tempo_preparo_min": r.tempo_preparo_min,
+                "categoria": r.categoria,
+                "foto_caminho": r.foto_caminho,
+                "criada_em": r.criada_em,
+                "qtd_ingredientes": len(r.ingredientes),
+                "ingredientes": [
+                    {
+                        "id": i.id,
+                        "nome_ingrediente": i.nome_ingrediente,
+                        "quantidade": i.quantidade,
+                        "quantidade_formatada": i.quantidade_formatada,
+                        "unidade": i.unidade,
+                        "gtin_associado": i.gtin_associado,
+                    }
+                    for i in r.ingredientes
+                ],
+            }
+            for r in recs
+        ],
+        "categorias": categorias,
+    })
+
+
+@app.get("/api/receitas/{receita_id}")
+async def detalhe_receita(receita_id: int, _: Morador, con: Banco):
+    rec = receitas.obter_receita(con, receita_id)
+    if rec is None:
+        raise HTTPException(404, "Receita não encontrada")
+    return responder({
+        "id": rec.id,
+        "nome": rec.nome,
+        "porcoes": rec.porcoes,
+        "tempo_preparo_min": rec.tempo_preparo_min,
+        "instrucoes": rec.instrucoes,
+        "categoria": rec.categoria,
+        "foto_caminho": rec.foto_caminho,
+        "criada_em": rec.criada_em,
+        "ingredientes": [
+            {
+                "id": i.id,
+                "nome_ingrediente": i.nome_ingrediente,
+                "quantidade": i.quantidade,
+                "quantidade_formatada": i.quantidade_formatada,
+                "unidade": i.unidade,
+                "gtin_associado": i.gtin_associado,
+            }
+            for i in rec.ingredientes
+        ],
+    })
+
+
+@app.post("/api/receitas")
+async def criar_nova_receita(dados: ReceitaEntrada, _: Morador, con: Banco):
+    if config().app_mode == "demo":
+        raise HTTPException(403, "Criação de receitas desativada na demonstração pública.")
+    try:
+        rec_id = receitas.criar_receita(
+            con,
+            nome=dados.nome,
+            porcoes=dados.porcoes,
+            tempo_preparo_min=dados.tempo_preparo_min,
+            instrucoes=dados.instrucoes,
+            categoria=dados.categoria,
+            ingredientes=[
+                {
+                    "nome_ingrediente": ing.nome_ingrediente,
+                    "quantidade": ing.quantidade,
+                    "unidade": ing.unidade,
+                    "gtin_associado": ing.gtin_associado,
+                }
+                for ing in dados.ingredientes
+            ],
+        )
+    except (ValueError, TypeError) as erro:
+        raise HTTPException(422, str(erro)) from erro
+    return responder({"id": rec_id, "receita": receitas.obter_receita(con, rec_id)})
+
+
+@app.put("/api/receitas/{receita_id}")
+async def editar_receita(receita_id: int, dados: ReceitaEntrada, _: Morador, con: Banco):
+    if config().app_mode == "demo":
+        raise HTTPException(403, "Edição de receitas desativada na demonstração pública.")
+    try:
+        rec = receitas.atualizar_receita(
+            con,
+            receita_id=receita_id,
+            nome=dados.nome,
+            porcoes=dados.porcoes,
+            tempo_preparo_min=dados.tempo_preparo_min,
+            instrucoes=dados.instrucoes,
+            categoria=dados.categoria,
+            ingredientes=[
+                {
+                    "nome_ingrediente": ing.nome_ingrediente,
+                    "quantidade": ing.quantidade,
+                    "unidade": ing.unidade,
+                    "gtin_associado": ing.gtin_associado,
+                }
+                for ing in dados.ingredientes
+            ],
+        )
+    except (ValueError, TypeError) as erro:
+        raise HTTPException(422, str(erro)) from erro
+    return responder({"ok": True, "receita": rec})
+
+
+@app.delete("/api/receitas/{receita_id}")
+async def deletar_receita(receita_id: int, _: Morador, con: Banco):
+    if config().app_mode == "demo":
+        raise HTTPException(403, "Exclusão de receitas desativada na demonstração pública.")
+    sucesso = receitas.excluir_receita(con, receita_id, pasta_fotos=config().pasta_fotos_receitas)
+    if not sucesso:
+        raise HTTPException(404, "Receita não encontrada")
+    return responder({"ok": True})
+
+
+@app.post("/api/receitas/{receita_id}/foto")
+async def upload_foto_receita(
+    receita_id: int, _: Morador, con: Banco, foto: Annotated[UploadFile, File()]
+):
+    if config().app_mode == "demo":
+        raise HTTPException(403, "Upload de fotos desativado na demonstração pública.")
+    bruto = await foto.read()
+    if len(bruto) > 10 * 1024 * 1024:
+        raise HTTPException(422, "Foto muito grande (máximo 10 MB).")
+    try:
+        foto_caminho = receitas.salvar_foto_receita(
+            con, config().pasta_fotos_receitas, receita_id, bruto
+        )
+    except ValueError as erro:
+        raise HTTPException(422, str(erro)) from erro
+    return responder({"ok": True, "foto_caminho": foto_caminho})
+
+
+@app.delete("/api/receitas/{receita_id}/foto")
+async def apagar_foto_receita(receita_id: int, _: Morador, con: Banco):
+    if config().app_mode == "demo":
+        raise HTTPException(403, "Operação desativada na demonstração pública.")
+    receitas.remover_foto_receita(con, config().pasta_fotos_receitas, receita_id)
+    return responder({"ok": True})
+
+
+@app.get("/api/receitas/{receita_id}/foto")
+async def obter_foto_receita(receita_id: int, con: Banco):
+    rec = receitas.obter_receita(con, receita_id)
+    if not rec or not rec.foto_caminho:
+        raise HTTPException(404, "Foto não encontrada")
+    caminho = config().pasta_fotos_receitas / Path(rec.foto_caminho).name
+    if not caminho.exists():
+        raise HTTPException(404, "Arquivo de foto não encontrado no disco")
+    return FileResponse(
+        caminho,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@app.post("/api/receitas/parse-ingredientes")
+async def parse_ingredientes_endpoint(dados: ParserIngredientesEntrada, _: Morador):
+    itens = receitas.parse_texto_ingredientes(dados.texto)
+    return responder({"ingredientes": itens})
+
+
+@app.post("/api/receitas/{receita_id}/enviar-para-lista")
+async def enviar_para_lista(
+    receita_id: int, dados: EnviarIngredientesLista, quem: Morador, con: Banco
+):
+    if config().app_mode == "demo":
+        raise HTTPException(403, "Operação desativada na demonstração pública.")
+    rec = receitas.obter_receita(con, receita_id)
+    if rec is None:
+        raise HTTPException(404, "Receita não encontrada")
+
+    lista_id = dados.lista_id
+    if not lista_id:
+        nome_lista = dados.nome_nova_lista or f"Receita: {rec.nome}"
+        lista_id = listas.criar(con, nome_lista, quem)
+
+    ingredientes_map = {i.id: i for i in rec.ingredientes}
+    adicionados = 0
+    for i_id in dados.ingrediente_ids:
+        ing = ingredientes_map.get(i_id)
+        if not ing:
+            continue
+        p_id = _obter_ou_criar_produto_para_ingrediente(
+            con, ing.nome_ingrediente, ing.gtin_associado
+        )
+        listas.por_produto(con, lista_id, p_id, ing.quantidade)
+        adicionados += 1
+
+    return responder({"ok": True, "lista_id": lista_id, "adicionados": adicionados})
 
 
 # ── a PWA ────────────────────────────────────────────────────────────────────

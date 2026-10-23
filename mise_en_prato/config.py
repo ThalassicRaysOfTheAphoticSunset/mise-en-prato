@@ -15,6 +15,7 @@ class Config(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # ── onde ficam as coisas ─────────────────────────────────────────────────
+    app_mode: str = "home"
     dados: Path = Path("/dados")
     porta: int = 8090
     # Em que endereço prender. Em produção é o IP da tailnet, e quem prende é o
@@ -64,6 +65,10 @@ class Config(BaseSettings):
     @property
     def pasta_backups(self) -> Path:
         return self.dados / "backups"
+
+    @property
+    def pasta_fotos_receitas(self) -> Path:
+        return self.dados / "receitas" / "fotos"
 
     @property
     def mapa_moradores(self) -> dict[str, str]:

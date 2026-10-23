@@ -99,9 +99,10 @@ document.addEventListener('visibilitychange', async () => {
 });
 
 const carregadores = {};
+window.carregadores = carregadores;
 function mudarAba(nome) {
   document.querySelectorAll('#abas button').forEach((b) => b.classList.toggle('ativa', b.dataset.aba === nome));
-  ['enviar', 'gastos', 'produtos', 'lista', 'revisao'].forEach((n) => {
+  ['enviar', 'gastos', 'produtos', 'receitas', 'lista', 'revisao'].forEach((n) => {
     const el = $('#aba-' + n);
     if (el) el.hidden = n !== nome;
   });
