@@ -28,10 +28,14 @@ services:
       context: .
       target: dev
     container_name: mise-en-prato-dev
+    ports:
+      - "8090:8090"
     environment:
       - TZ=America/Sao_Paulo
       - PYTHONUNBUFFERED=1
       - APP_MODE=dev
+      - EXIGIR_TAILNET=false
+      - ESCUTAR=0.0.0.0
       - MORADORES=${MORADORES:-dev@local.test=Dev}
       - LOCAL=${LOCAL:--25.2947,-54.0940}
       - RAIO_KM=${RAIO_KM:-15}
