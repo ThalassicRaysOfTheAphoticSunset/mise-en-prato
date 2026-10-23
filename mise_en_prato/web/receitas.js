@@ -248,27 +248,34 @@
     if (!listaEl || !selectListas) return;
 
     // Preenche checklist de ingredientes
-    listaEl.innerHTML = receitaAtiva.ingredientes
-      .map((ing) => {
-        return `
-        <label style="display:flex;align-items:center;gap:.6rem;cursor:pointer;padding:.3rem 0">
-          <input type="checkbox" class="chk-enviar-ingrediente" value="${ing.id}" checked>
-          <span><strong>${ing.nome_ingrediente}</strong> (${ing.quantidade_formatada || ing.quantidade} ${ing.unidade})</span>
-        </label>`;
-      })
-      .join('');
+    const itens = receitaAtiva.ingredientes || [];
+    if (itens.length) {
+      listaEl.innerHTML = itens
+        .map((ing) => {
+          const qtdFormatada = ing.quantidade_formatada || ing.quantidade || '';
+          const unidTexto = ing.unidade && ing.unidade !== 'unidade' ? ing.unidade : '';
+          const detalhe = [qtdFormatada, unidTexto].filter(Boolean).join(' ');
+          return `
+          <label style="display:flex;align-items:center;gap:.6rem;cursor:pointer;padding:.3rem 0">
+            <input type="checkbox" class="chk-enviar-ingrediente" value="${ing.id}" checked>
+            <span><strong>${ing.nome_ingrediente}</strong> ${detalhe ? `(${detalhe})` : ''}</span>
+          </label>`;
+        })
+        .join('');
+    } else {
+      listaEl.innerHTML = '<p class="fraca" style="margin:0">Esta receita não tem ingredientes cadastrados.</p>';
+    }
 
-    // Busca listas existentes
+    // Inicializa opções de lista
+    selectListas.innerHTML = '<option value="">+ Criar nova lista com nome da receita</option>';
     try {
       const resp = await api('/api/listas');
       const listas = resp.listas || [];
-      let opcoes = '<option value="">+ Criar nova lista com nome da receita</option>';
       listas.forEach((l) => {
-        opcoes += `<option value="${l.id}">Adicionar à lista: "${l.nome}" (${l.itens || 0} itens)</option>`;
+        selectListas.innerHTML += `<option value="${l.id}">Adicionar à lista: "${l.nome}" (${l.itens || 0} itens)</option>`;
       });
-      selectListas.innerHTML = opcoes;
     } catch (err) {
-      selectListas.innerHTML = '<option value="">+ Criar nova lista com nome da receita</option>';
+      console.warn('Erro ao carregar listas existentes:', err);
     }
 
     $('#modal-enviar-lista').hidden = false;
@@ -526,6 +533,31 @@
   // ── Inicialização ─────────────────────────────────────────────────────────
   function init() {
     $('#btn-nova-receita')?.addEventListener('click', abrirModalNovaReceita);
+
+    // Fechar ao clicar fora (no backdrop escuro)
+    $('#modal-receita')?.addEventListener('click', (e) => {
+      if (e.target.id === 'modal-receita') fecharModalReceita();
+    });
+    $('#modal-enviar-lista')?.addEventListener('click', (e) => {
+      if (e.target.id === 'modal-enviar-lista') fecharModalEnviarLista();
+    });
+
+    // Fechar modais ao pressionar ESC
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const modalLista = $('#modal-enviar-lista');
+        const modalRec = $('#modal-receita');
+        const modalCoz = $('#modal-modo-cozinha');
+
+        if (modalLista && !modalLista.hidden) {
+          fecharModalEnviarLista();
+        } else if (modalRec && !modalRec.hidden) {
+          fecharModalReceita();
+        } else if (modalCoz && !modalCoz.hidden) {
+          fecharModoCozinha();
+        }
+      }
+    });
 
     let debounceTimer;
     $('#busca-receitas')?.addEventListener('input', (e) => {
