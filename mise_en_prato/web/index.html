@@ -23,6 +23,7 @@
     <button data-aba="enviar" class="ativa">Enviar</button>
     <button data-aba="gastos">Gastos</button>
     <button data-aba="produtos">Produtos</button>
+    <button data-aba="receitas">Receitas</button>
     <button data-aba="lista">Lista</button>
     <button data-aba="revisao" id="btn-revisao">Revisão</button>
   </nav>
@@ -227,9 +228,170 @@
         diagnóstico.</p>
       <div id="revisao-galeria" class="grade-falhas"></div>
     </section>
+
+    <!-- ── receitas ────────────────────────────────────────────────────────── -->
+    <section id="aba-receitas" hidden>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;gap:.5rem;flex-wrap:wrap">
+        <h2 style="margin:0">Livro de Receitas</h2>
+        <button type="button" id="btn-nova-receita" class="acao">+ Nova Receita</button>
+      </div>
+
+      <div style="margin-bottom:.8rem">
+        <input id="busca-receitas" type="search" placeholder="🔍 Buscar receita ou ingrediente..." autocomplete="off">
+      </div>
+
+      <div id="chips-categorias-receitas" class="chips-sabores-container" style="margin-bottom:1rem"></div>
+
+      <div id="grade-receitas" class="grade-receitas"></div>
+      <div id="receitas-vazio" class="estado" hidden style="text-align:center;padding:2rem">
+        Nenhuma receita cadastrada ainda. Toque em <strong>+ Nova Receita</strong> acima para começar!
+      </div>
+
+      <!-- Modal de Cadastro / Edição de Receita -->
+      <div id="modal-receita" class="modal-backdrop" hidden>
+        <div class="modal-conteudo">
+          <div class="linha" style="margin-bottom:.8rem">
+            <h3 id="modal-receita-titulo" style="margin:0">Nova Receita</h3>
+            <button type="button" class="btn-fechar-modal" onclick="fecharModalReceita()">✕</button>
+          </div>
+
+          <form id="form-receita">
+            <input type="hidden" id="form-rec-id">
+
+            <label class="rotulo" for="form-rec-nome">Nome da Receita</label>
+            <input type="text" id="form-rec-nome" required placeholder="Ex: Bolo de Cenoura com Chocolate">
+
+            <div style="display:flex;gap:.5rem;margin-top:.6rem">
+              <div style="flex:1">
+                <label class="rotulo" for="form-rec-porcoes">Porções</label>
+                <input type="number" id="form-rec-porcoes" min="1" value="4" required>
+              </div>
+              <div style="flex:1">
+                <label class="rotulo" for="form-rec-tempo">Tempo (min)</label>
+                <input type="number" id="form-rec-tempo" min="0" placeholder="Ex: 45">
+              </div>
+              <div style="flex:1.2">
+                <label class="rotulo" for="form-rec-categoria">Categoria</label>
+                <input type="text" id="form-rec-categoria" placeholder="Ex: Almoço, Sobremesa" list="lista-sugestoes-categorias">
+                <datalist id="lista-sugestoes-categorias"></datalist>
+              </div>
+            </div>
+
+            <div style="margin-top:.8rem">
+              <label class="rotulo" for="form-rec-foto">Foto de Capa</label>
+              <div style="display:flex;gap:.5rem;align-items:center">
+                <input type="file" id="form-rec-foto" accept="image/*" style="font-size:.85rem">
+                <span id="form-rec-foto-status" class="fraca" style="font-size:.8rem"></span>
+              </div>
+            </div>
+
+            <div style="margin-top:1.2rem;border-top:1px solid var(--borda);padding-top:.8rem">
+              <div class="linha">
+                <label class="rotulo" style="margin:0">Ingredientes</label>
+                <button type="button" class="btn-link-secundario" id="btn-toggle-colar-ingredientes" onclick="toggleColarIngredientes()">
+                  📋 Colar texto corrido
+                </button>
+              </div>
+
+              <!-- Caixa inteligente para colar texto corrido -->
+              <div id="caixa-colar-ingredientes" class="cartao" style="margin:.5rem 0;background:var(--realce)" hidden>
+                <p class="dica" style="margin:0 0 .4rem">Cole os ingredientes (um por linha). O app separa quantidade e unidade automaticamente:</p>
+                <textarea id="txt-colar-ingredientes" rows="4" style="width:100%;font:inherit;padding:.5rem;border-radius:8px;border:1px solid var(--borda);background:var(--painel);color:var(--tinta)" placeholder="2 xícaras de farinha&#10;3 ovos&#10;500g de carne moída&#10;Sal a gosto"></textarea>
+                <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-top:.4rem">
+                  <button type="button" class="acao" style="font-size:.85rem;padding:.4rem .7rem" onclick="processarTextoIngredientes()">Processar Linhas</button>
+                </div>
+              </div>
+
+              <div id="lista-campos-ingredientes" style="margin-top:.5rem;display:flex;flex-direction:column;gap:.4rem"></div>
+              <button type="button" class="btn-adicionar-linha" onclick="adicionarLinhaIngrediente()">+ Adicionar Ingrediente</button>
+            </div>
+
+            <div style="margin-top:1rem">
+              <label class="rotulo" for="form-rec-instrucoes">Modo de Preparo / Instruções</label>
+              <textarea id="form-rec-instrucoes" rows="5" style="width:100%;font:inherit;padding:.6rem;border-radius:10px;border:1px solid var(--borda);background:var(--painel);color:var(--tinta)" placeholder="Passo a passo do preparo..."></textarea>
+            </div>
+
+            <div style="display:flex;justify-content:flex-end;gap:.6rem;margin-top:1.2rem">
+              <button type="button" class="botao-secundario" onclick="fecharModalReceita()">Cancelar</button>
+              <button type="submit" class="acao" id="btn-salvar-receita">Salvar Receita</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Modal Modo Cozinha (Fullscreen Hands-Free) -->
+      <div id="modal-modo-cozinha" class="modo-cozinha-overlay" hidden>
+        <div class="modo-cozinha-conteudo">
+          <header class="modo-cozinha-header">
+            <button type="button" class="btn-fechar-cozinha" onclick="fecharModoCozinha()">← Voltar</button>
+            <div class="modo-cozinha-badges">
+              <span id="cozinha-status-wake" class="badge-mercado ativo">💡 Tela acesa</span>
+              <span id="cozinha-badge-categoria" class="badge-categoria"></span>
+            </div>
+          </header>
+
+          <div class="modo-cozinha-corpo">
+            <div id="cozinha-foto-container" class="cozinha-foto" hidden>
+              <img id="cozinha-foto" alt="Foto do prato">
+            </div>
+
+            <h1 id="cozinha-titulo" class="cozinha-titulo"></h1>
+            <div class="cozinha-meta fraca">
+              <span id="cozinha-tempo"></span>
+              <span id="cozinha-divisor-meta">•</span>
+              <span>Porções:</span>
+              <div class="seletor-escala-porcoes">
+                <button type="button" class="btn-escala" onclick="ajustarEscalaCozinha(0.5)">½x</button>
+                <button type="button" class="btn-escala ativo" onclick="ajustarEscalaCozinha(1)">1x</button>
+                <button type="button" class="btn-escala" onclick="ajustarEscalaCozinha(2)">2x</button>
+                <button type="button" class="btn-escala" onclick="ajustarEscalaCozinha(3)">3x</button>
+                <button type="button" class="btn-escala" onclick="ajustarEscalaCozinha(4)">4x</button>
+              </div>
+            </div>
+
+            <div class="cozinha-secao-ingredientes">
+              <div class="linha" style="margin-bottom:.5rem">
+                <h2 style="margin:0">Mise en place (Ingredientes)</h2>
+                <button type="button" class="btn-comprar-faltantes" onclick="abrirModalEnviarLista()">🛒 Comprar ingredientes</button>
+              </div>
+              <p class="dica" style="margin:0 0 .6rem">Toque no ingrediente para marcar o que já separou ou adicionou:</p>
+              <div id="cozinha-lista-ingredientes" class="cozinha-checklist"></div>
+            </div>
+
+            <div class="cozinha-secao-instrucoes">
+              <h2>Instruções de Preparo</h2>
+              <div id="cozinha-instrucoes-texto" class="cozinha-passos"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal Enviar para Lista de Compras -->
+      <div id="modal-enviar-lista" class="modal-backdrop" hidden>
+        <div class="modal-conteudo" style="max-width:32rem">
+          <div class="linha" style="margin-bottom:.8rem">
+            <h3 style="margin:0">Comprar Ingredientes</h3>
+            <button type="button" class="btn-fechar-modal" onclick="fecharModalEnviarLista()">✕</button>
+          </div>
+          <p class="dica">Desmarque o que você já tem em casa. O restante irá para sua lista:</p>
+          <div id="enviar-lista-checklist" style="display:flex;flex-direction:column;gap:.4rem;margin:1rem 0;max-height:16rem;overflow-y:auto"></div>
+
+          <div style="margin-top:.8rem">
+            <label class="rotulo" for="select-destino-lista">Adicionar a qual lista?</label>
+            <select id="select-destino-lista" style="width:100%;padding:.6rem;border-radius:10px;border:1px solid var(--borda);background:var(--painel);color:var(--tinta);font:inherit"></select>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:.6rem;margin-top:1.2rem">
+            <button type="button" class="botao-secundario" onclick="fecharModalEnviarLista()">Cancelar</button>
+            <button type="button" class="acao" onclick="confirmarEnviarParaLista()">Adicionar à Lista</button>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <script src="/app.js"></script>
+  <script src="/receitas.js" defer></script>
 </body>
 
 </html>
