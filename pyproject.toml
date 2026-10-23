@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cupomzinho"
+version = "0.1.0"
+description = "Cupom fiscal, gasto de mercado e caça a preço — NFC-e do Paraná"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "httpx>=0.28",
+    "beautifulsoup4>=4.13",
+    "lxml>=5.3",
+    "pydantic-settings>=2.7",
+    "python-multipart>=0.0.20",  # o FastAPI exige para receber a foto do QR
+    "pyzbar>=0.1.9",
+    # a segunda opinião sobre o QR: lê cupom manchado que o zbar recusa (qr.py).
+    # Wheel manylinux, sem pacote apt atrás — ao contrário do libzbar0.
+    "zxing-cpp>=2.2",
+    "pillow>=11",
+    "pytesseract>=0.3.10",
+]
+
+[tool.setuptools]
+packages = ["cupomzinho"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.25", "ruff>=0.9",
+       "qrcode>=8.0"]  # só para os testes: gera QR sintético para degradar de propósito
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# sem instalar o próprio pacote: o pytest acha o cupomzinho/ pela raiz do repo
+pythonpath = ["."]

@@ -1,0 +1,1369 @@
+#!/usr/bin/env python3
+"""O servidor do cupomzinho: a API e a PWA, no mesmo processo.
+
+    uvicorn cupomzinho.main:app --host 0.0.0.0 --port 8090
+
+Escuta só no IP da tailnet (quem publica a porta é o compose), então todo mundo
+que chega já passou pelo Tailscale — falta apenas perguntar ao tailscaled quem
+é. Ver identidade.py.
+"""
+import asyncio
+import json
+import logging
+import re
+import sqlite3
+import sys
+from contextlib import asynccontextmanager
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from . import (
+    catalogo,
+    cupons,
+    enriquecimento,
+    listas,
+    menor_preco,
+    relatorios,
+    sanidade,
+    tarefas,
+    unificacao,
+)
+from .banco import conectar
+from .config import config
+from .consulta_chave import (
+    CaptchaRecusado,
+    ChaveNaoAchada,
+    Desafio,
+    LayoutDesconhecido,
+    PortalMudou,
+    abrir_desafio,
+    consultar,
+    interpretar_resposta,
+)
+from .identidade import NaoIdentificado, quem_e
+from .nfce_pr import (
+    Cupom,
+    ErroSefaz,
+    Estabelecimento,
+    buscar,
+    chave_da_url,
+    cnpj_formatado,
+    dados_da_chave,
+    dinheiro,
+    interpretar,
+    validar_chave,
+)
+from .ocr import interpretar_cupom_ocr
+from .qr import ler_qr
+
+WEB = Path(__file__).parent / "web"
+log = logging.getLogger("cupomzinho.main")
+
+
+class Codificador(json.JSONEncoder):
+    """Decimal vira string no JSON, não float.
+
+    Float aqui reintroduziria justamente o erro de centavo que o banco em
+    inteiros existe para evitar; a tela formata a string como quiser.
+    """
+
+    def default(self, o):
+        return str(o) if isinstance(o, Decimal) else super().default(o)
+
+
+class RespostaJSON(JSONResponse):
+    def render(self, content) -> bytes:
+        return json.dumps(content, cls=Codificador, ensure_ascii=False).encode("utf-8")
+
+
+def _guardar_falha(bruto: bytes, nome: str) -> Path:
+    """Guarda a imagem que não deu QR, para virar caso de teste."""
+    pasta = config().dados / "falhas"
+    pasta.mkdir(parents=True, exist_ok=True)
+    sufixo = Path(nome).suffix or ".bin"
+    alvo = pasta / f"{datetime.now():%Y-%m-%d_%H%M%S}{sufixo}"
+    alvo.write_bytes(bruto)
+    return alvo
+
+
+def responder(dados) -> RespostaJSON:
+    """Devolve a resposta JÁ SERIALIZADA, e é de propósito.
+
+    Se a rota devolvesse um dict, o FastAPI passaria antes pelo jsonable_encoder
+    dele — que transforma Decimal em FLOAT. Isso reintroduziria, na última
+    curva, exatamente o erro de centavo que o banco em inteiros existe para
+    evitar. Objeto Response o FastAPI entrega intacto.
+    """
+    return RespostaJSON(dados)
+
+
+def configurar_log() -> None:
+    """Faz o log da app aparecer no `docker logs`.
+
+    O uvicorn monta a configuração de log dele e não adota logger de terceiros,
+    então sem isto todo `log.info` da app some — e some justamente na hora de
+    diagnosticar, que foi o que aconteceu com a primeira foto que falhou.
+    """
+    log = logging.getLogger("cupomzinho")
+    if log.handlers:
+        return
+    saida = logging.StreamHandler(sys.stdout)
+    saida.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s",
+                                         "%H:%M:%S"))
+    log.addHandler(saida)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+
+@asynccontextmanager
+async def ciclo_de_vida(app: FastAPI):
+    cfg = config()
+    configurar_log()
+    cfg.pasta_cupons.mkdir(parents=True, exist_ok=True)
+    cfg.pasta_backups.mkdir(parents=True, exist_ok=True)
+    app.state.con = conectar(cfg.banco)
+    # O backup vive no ciclo de vida do servidor: sobe junto, desce junto.
+    app.state.tarefas = [
+        asyncio.create_task(tarefas.laco_de_backup(app.state.con, cfg.pasta_backups)),
+    ]
+    yield
+    for tarefa in app.state.tarefas:
+        tarefa.cancel()
+    app.state.con.close()
+
+
+app = FastAPI(title="cupomzinho", default_response_class=RespostaJSON, lifespan=ciclo_de_vida)
+
+
+@app.exception_handler(menor_preco.TetoAtingido)
+async def teto_virou_429(_request: Request, erro: menor_preco.TetoAtingido):
+    """Teto de consultas não é falha do servidor — é a regra funcionando.
+
+    Existe como tratador global, e não como try/except numa rota, porque o teto
+    pode estourar em qualquer ponto que consulte: no canário antes do lote, no
+    meio dele, ou numa rota que ainda nem foi escrita. Vazando, virava 500.
+    """
+    return RespostaJSON({"detail": str(erro)}, status_code=429)
+
+
+def banco(request: Request) -> sqlite3.Connection:
+    return request.app.state.con
+
+
+async def morador(request: Request) -> str:
+    """Quem está pedindo. 403 para quem não é morador — inclusive visita da tailnet."""
+    cliente = request.client
+    if cliente is None:
+        raise HTTPException(403, "origem desconhecida")
+    try:
+        return await quem_e(cliente.host, cliente.port)
+    except NaoIdentificado as erro:
+        raise HTTPException(403, str(erro)) from erro
+
+
+# Apelidos das dependências. Além de deixarem a assinatura das rotas curta,
+# são o estilo que o FastAPI recomenda hoje — Depends() no valor padrão do
+# argumento funciona, mas é uma armadilha conhecida de Python.
+Banco = Annotated[sqlite3.Connection, Depends(banco)]
+Morador = Annotated[str, Depends(morador)]
+
+
+# ── envio de cupom ───────────────────────────────────────────────────────────
+class EnvioCupom(BaseModel):
+    url: str = ""      # a URL inteira do QR Code (é dela que sai o hash de segurança)
+    chave: str = ""    # só serve para reconsultar cupom já guardado
+
+
+def _guardar_html(chave: str, html: str) -> None:
+    """O HTML cru é gravado ANTES de interpretar.
+
+    Quando o portal mexer no layout, o reprocessamento roda em cima disto e
+    nenhum cupom se perde. Vale para as duas portas: a do QR e a da chave.
+    """
+    (config().pasta_cupons / f"{chave}.html").write_text(html, encoding="utf-8")
+
+
+def _gravar(con, chave: str, cupom, quem: str, origem: str, url_qr: str = "") -> dict:
+    """Grava o cupom já interpretado, mandando a chave informada prevalecer."""
+    if cupom.chave != chave:
+        cupom.avisos.append(
+            f"a chave da página ({cupom.chave}) difere da chave informada ({chave})")
+        cupom.chave = chave
+    era_novo = cupons.gravar(con, cupom, morador=quem, origem=origem, url_qr=url_qr)
+    return {"novo": era_novo, "cupom": cupons.ler(con, chave)}
+
+
+def _ja_guardado(con, chave: str) -> dict | None:
+    guardado = cupons.ler(con, chave) if cupons.existe(con, chave) else None
+    return {"novo": False, "cupom": guardado} if guardado else None
+
+
+def _chave_valida(bruta: str) -> str:
+    """A chave normalizada, ou 400 explicando qual das duas coisas deu errado."""
+    chave = chave_da_url(bruta)
+    if not chave:
+        raise HTTPException(400, "isso não tem 44 dígitos. A chave de acesso está impressa "
+                                 "no cupom, em grupos de quatro, logo acima do QR Code.")
+    if not validar_chave(chave):
+        raise HTTPException(400, "o dígito verificador não fecha — algum número saiu trocado. "
+                                 "Confira os 44 dígitos no papel e mande de novo.")
+    return chave
+
+
+def _registrar(con, url: str, quem: str, origem: str) -> dict:
+    """Busca pela URL do QR, interpreta e grava. Idempotente pela chave."""
+    url = (url or "").strip().lstrip("\ufeff").strip()
+    chave = chave_da_url(url)
+    if not chave:
+        raise HTTPException(400, "não encontrei uma chave de acesso de 44 dígitos nesse link")
+
+    guardado = _ja_guardado(con, chave)
+    if guardado and guardado.get("cupom") and guardado["cupom"].get("completo"):
+        return guardado
+
+    try:
+        html = buscar(url)
+    except Exception as erro:
+        raise HTTPException(502, f"a SEFAZ não respondeu: {erro}") from erro
+
+    _guardar_html(chave, html)
+    return _gravar(con, chave, interpretar(html), quem, origem, url_qr=url)
+
+
+@app.post("/api/cupom")
+async def enviar_cupom(envio: EnvioCupom, quem: Morador, con: Banco):
+    if envio.url:
+        return responder(_registrar(con, envio.url, quem, "qrcode"))
+    if envio.chave:
+        chave_limpa = (envio.chave or "").strip().lstrip("\ufeff").replace(" ", "")
+        guardado = cupons.ler(con, chave_limpa)
+        if not guardado:
+            raise HTTPException(
+                404,
+                "não tenho esse cupom guardado. A rota do QR Code exige o link inteiro, "
+                "com o hash de segurança; para entrar só com a chave, use a consulta "
+                "completa do portal, em /api/cupom/chave — ela pede um captcha.")
+        return responder({"novo": False, "cupom": guardado})
+    raise HTTPException(400, "mande a url do QR Code ou a chave de um cupom já guardado")
+
+
+@app.post("/api/cupom/foto")
+async def enviar_foto(quem: Morador, con: Banco, foto: Annotated[UploadFile, File()]):
+    """Foto do QR Code ou do cupom inteiro. Quem decodifica e processa é o servidor.
+
+    1. Tenta ler o QR Code (caminho rápido para obter a chave e consultar a SEFAZ).
+    2. Se não houver QR Code legível, executa o pipeline de OCR local (Tesseract + Pillow).
+    3. Se o OCR encontrar a chave de 44 dígitos com DV válido, busca no portal da SEFAZ.
+    4. Se for cupom sem chave (ou se a SEFAZ falhar), grava os dados lidos do papel diretamente.
+       - Centavos fechando: gravado como completo = 1.
+       - Divergência: gravado como completo = 0 e direcionado para a fila de revisão.
+    """
+    bruto = await foto.read()
+    try:
+        achados = ler_qr(bruto)
+    except ValueError as erro:
+        _guardar_falha(bruto, foto.filename or "foto")
+        raise HTTPException(400, str(erro)) from erro
+
+    for conteudo in achados:
+        if chave_da_url(conteudo):
+            return responder(_registrar(con, conteudo, quem, "foto"))
+
+    # Pipeline de OCR local no servidor
+    try:
+        cupom_ocr = interpretar_cupom_ocr(bruto)
+    except Exception as erro_ocr:
+        log.warning("Falha ao processar OCR da foto: %s", erro_ocr)
+        cupom_ocr = None
+
+    if cupom_ocr and (cupom_ocr.itens or validar_chave(cupom_ocr.chave)):
+        # Se achou chave NFC-e válida de 44 dígitos no papel, tenta a SEFAZ
+        if validar_chave(cupom_ocr.chave):
+            url_consulta = f"https://www.fazenda.pr.gov.br/nfce/qrcode?p={cupom_ocr.chave}|2|1|1"
+            try:
+                html = buscar(url_consulta)
+                _guardar_html(cupom_ocr.chave, html)
+                return responder(_gravar(con, cupom_ocr.chave, interpretar(html), quem, "foto"))
+            except Exception as e_sefaz:
+                log.info(
+                    "SEFAZ não retornou via QR simplificado da chave (%s); gravando itens do OCR",
+                    e_sefaz,
+                )
+
+        era_novo = cupons.gravar(con, cupom_ocr, morador=quem, origem="foto")
+        return responder({
+            "novo": era_novo,
+            "cupom": cupons.ler(con, cupom_ocr.chave),
+            "origem": "foto",
+            "ocr": True,
+        })
+
+    # A foto que não deu certo em nenhum leitor fica guardada
+    guardada = _guardar_falha(bruto, foto.filename or "foto")
+    log.warning("QR e OCR não reconheceram a foto; guardada em %s", guardada)
+
+    if achados:
+        raise HTTPException(
+            422, "achei um código nessa foto, mas não é o QR da nota fiscal. "
+                 "O certo é o quadradinho embaixo, perto da chave de acesso.")
+    raise HTTPException(
+        422, "não achei nenhum QR Code legível nem texto de cupom nesta foto. "
+             "A foto ficou guardada no servidor para análise.")
+
+
+@app.post("/api/cupom/html")
+async def enviar_html(quem: Morador, con: Banco, arquivo: Annotated[UploadFile, File()]):
+    """Recebe o arquivo HTML da NFC-e salvo direto do portal da SEFAZ."""
+    bruto = await arquivo.read()
+    try:
+        html = bruto.decode("utf-8")
+    except UnicodeDecodeError:
+        html = bruto.decode("iso-8859-1", errors="replace")
+
+    try:
+        cupom = interpretar(html)
+    except Exception as erro:
+        raise HTTPException(400, f"não consegui ler o cupom desse HTML: {erro}") from erro
+
+    if not cupom.chave or len(cupom.chave) != 44:
+        match = re.search(r"\b(?:\d[\s\xa0]*){44}\b", html)
+        if match:
+            chave_candidata = re.sub(r"\D", "", match.group(0))
+            if len(chave_candidata) == 44:
+                cupom.chave = chave_candidata
+
+    if not cupom.chave or len(cupom.chave) != 44 or not cupom.chave.isdigit():
+        raise HTTPException(400, "não encontrei uma chave de acesso de 44 dígitos no HTML")
+
+    _guardar_html(cupom.chave, html)
+    return responder(_gravar(con, cupom.chave, cupom, quem, "html"))
+
+
+# ── entrar pela chave, quando o QR está perdido ──────────────────────────────
+# O QR manchado não é hipótese: em 26/08/2026 duas fotos morreram em
+# dados/falhas/ e resistiram a 840 combinações de escala, filtro e
+# decodificador. A chave, essa, continua impressa no papel — e o portal do
+# estado tem uma segunda consulta que a aceita, cobrando um captcha.
+#
+# Os desafios abertos vivem AQUI, em memória: são sessão do portal, não dado da
+# casa, e não têm o que fazer em disco. Um punhado basta, porque do outro lado
+# é gente digitando letra por letra.
+TETO_DESAFIOS = 10
+_desafios: dict[str, Desafio] = {}
+
+
+def _limpar_desafios() -> None:
+    for id_desafio in [i for i, d in _desafios.items() if d.vencido]:
+        _desafios.pop(id_desafio, None)
+    while len(_desafios) > TETO_DESAFIOS:
+        _desafios.pop(next(iter(_desafios)))
+
+
+def _cupom_da_chave(con, chave: str, *, total=None, emitido_em=None, avisos: list[str]) -> Cupom:
+    """O cupom que a própria chave já permite montar: loja, número, série, mês.
+
+    Sem itens, de propósito — meia informação vale mais que nenhuma, e o
+    `completo = 0` manda ele para a fila de revisão.
+    """
+    dados = dados_da_chave(chave)
+    linha = con.execute(
+        "SELECT razao FROM estabelecimento WHERE cnpj = ?", (dados["cnpj"],)).fetchone()
+    # Loja já conhecida mantém o nome dela: `_garantir_estabelecimento` sobrescreve
+    # a razão social, e cupom digitado não pode rebatizar o mercado de "CNPJ ...".
+    razao = linha["razao"] if linha else f"CNPJ {cnpj_formatado(dados['cnpj'])}"
+    return Cupom(
+        chave=chave,
+        estabelecimento=Estabelecimento(cnpj=dados["cnpj"], razao=razao),
+        emitido_em=emitido_em,
+        numero=dados["numero"], serie=dados["serie"],
+        total=total, valor_pago=total,
+        avisos=list(avisos))
+
+
+def _total_digitado(texto: str) -> Decimal:
+    bruto = (texto or "").replace("R$", "").strip()
+    try:
+        valor = dinheiro(bruto) if "," in bruto else Decimal(bruto)
+    except (InvalidOperation, ValueError):
+        valor = None
+    if valor is None or valor <= 0:
+        raise HTTPException(400, "quanto foi a compra? Mande o total do cupom, como 106,74.")
+    return valor
+
+
+def _data_digitada(texto: str, chave: str) -> datetime:
+    try:
+        data = datetime.fromisoformat((texto or "").strip())
+    except ValueError as erro:
+        raise HTTPException(400, "que dia foi a compra? A data vai como AAAA-MM-DD.") from erro
+    dados = dados_da_chave(chave)
+    # A chave carrega o mês da emissão. Data fora dele jogaria o gasto no mês
+    # errado — e gasto no mês errado é pior que cupom faltando.
+    if (data.year, data.month) != (dados["ano"], dados["mes"]):
+        raise HTTPException(
+            400, f"a chave diz que essa nota é de {dados['mes']:02d}/{dados['ano']}, "
+                 f"e a data mandada é de {data.month:02d}/{data.year}.")
+    return data
+
+
+class EnvioChave(BaseModel):
+    chave: str                 # os 44 dígitos, com ou sem os espaços do papel
+    desafio: str               # o id devolvido por /api/chave/desafio
+    captcha: str               # as letras que o morador leu na imagem
+    reconsultar: bool = False  # forçar reconsulta no portal
+
+
+class EnvioManual(BaseModel):
+    chave: str
+    total: str = ""
+    emitido_em: str = ""       # AAAA-MM-DD
+
+
+# As três rotas abaixo são `def` e não `async def` de propósito: falam com a
+# rede de forma síncrona, e o FastAPI as manda para o threadpool em vez de
+# travar o event loop de todo mundo enquanto o portal do estado pensa.
+@app.get("/api/chave/desafio")
+def desafio_de_captcha(quem: Morador):
+    """Um captcha novo, para o morador ler e digitar.
+
+    Quem resolve é gente. O cupomzinho só carrega a imagem até a tela.
+    """
+    _limpar_desafios()
+    try:
+        desafio = abrir_desafio()
+    except PortalMudou as erro:
+        raise HTTPException(502, f"o formulário do portal mudou de forma: {erro}") from erro
+    except Exception as erro:
+        raise HTTPException(502, f"a SEFAZ não respondeu: {erro}") from erro
+
+    _desafios[desafio.id] = desafio
+    log.info("captcha aberto para %s (%d desafios vivos)", quem, len(_desafios))
+    return responder({"desafio": desafio.id, "imagem": desafio.imagem_data_uri})
+
+
+@app.post("/api/cupom/chave")
+def enviar_chave(envio: EnvioChave, quem: Morador, con: Banco):
+    """Consulta completa pela chave digitada — a saída quando o QR não lê.
+
+    A chave se confere sozinha, então dígito trocado é recusado ANTES de gastar
+    o captcha. E o captcha, uma vez usado, não volta: erro rende desafio novo.
+    """
+    chave = _chave_valida(envio.chave)
+    if not envio.reconsultar and (guardado := _ja_guardado(con, chave)):
+        return responder(guardado)
+
+    desafio = _desafios.pop(envio.desafio, None)
+    if desafio is None or desafio.vencido:
+        raise HTTPException(410, "esse captcha venceu. Peça outra imagem e mande de novo.")
+
+    try:
+        html = consultar(desafio, chave, envio.captcha.strip())
+    except CaptchaRecusado as erro:
+        raise HTTPException(422, "as letras do captcha não conferiram — a imagem já foi "
+                                 "trocada, é só ler a nova.") from erro
+    except ChaveNaoAchada as erro:
+        raise HTTPException(404, "o portal não achou nota com essa chave. Confira os dígitos; "
+                                 "nota recém-emitida às vezes demora a aparecer.") from erro
+    except Exception as erro:
+        raise HTTPException(502, f"a SEFAZ não respondeu: {erro}") from erro
+
+    try:
+        cupom = interpretar_resposta(html)
+    except ErroSefaz as erro:
+        raise HTTPException(502, f"a SEFAZ não respondeu: {erro}") from erro
+    except LayoutDesconhecido:
+        # O HTML cru já está em disco: é dele que sai a fixture que ensina o
+        # parser a ler esta tela. Até lá o cupom entra pela metade, não se perde.
+        _guardar_html(chave, html)
+        log.warning("consulta completa em layout desconhecido; HTML guardado para a chave %s",
+                    chave)
+        cupom = _cupom_da_chave(
+            con, chave, avisos=["a consulta completa veio num layout que ainda não sei ler; "
+                                "o cupom entrou sem os itens"])
+        return responder(_gravar(con, chave, cupom, quem, "chave"))
+
+    _guardar_html(chave, html)
+    return responder(_gravar(con, chave, cupom, quem, "chave"))
+
+
+@app.post("/api/cupom/manual")
+def enviar_manual(envio: EnvioManual, quem: Morador, con: Banco):
+    """A rede de segurança: registrar o gasto só com a chave e o total.
+
+    Para quando nem o portal ajuda — SEFAZ fora do ar, captcha teimoso. Entra
+    sem itens, com aviso, e cai na fila de revisão para ser reconsultado depois.
+    """
+    chave = _chave_valida(envio.chave)
+    guardado = _ja_guardado(con, chave)
+    if guardado and guardado["cupom"]["completo"]:
+        return responder(guardado)
+
+    cupom = _cupom_da_chave(
+        con, chave,
+        total=_total_digitado(envio.total),
+        emitido_em=_data_digitada(envio.emitido_em, chave),
+        avisos=["cupom digitado a partir da chave: sem os itens, só o total"])
+    return responder(_gravar(con, chave, cupom, quem, "manual"))
+
+
+# ── consulta ─────────────────────────────────────────────────────────────────
+@app.get("/api/saude")
+async def saude(con: Banco):
+    """Sem autenticação: é o que o Uptime Kuma bate. Não devolve dado da casa."""
+    return responder({"ok": True,
+                      "cupons": con.execute("SELECT COUNT(*) FROM cupom").fetchone()[0]})
+
+
+@app.get("/api/eu")
+async def eu(quem: Morador):
+    return responder({"morador": quem})
+
+
+@app.get("/api/cupons")
+async def listar_cupons(_: Morador, con: Banco, limite: int = 20):
+    return responder({"cupons": cupons.recentes(con, limite),
+                      "revisao": cupons.fila_de_revisao(con)})
+
+
+@app.get("/api/cupom/{chave}")
+async def ver_cupom(chave: str, _: Morador, con: Banco):
+    guardado = cupons.ler(con, chave)
+    if not guardado:
+        raise HTTPException(404, "cupom não encontrado")
+    return responder(guardado)
+
+
+class ItemRevisao(BaseModel):
+    descricao: str
+    quantidade: str = "1"
+    unidade: str = "UN"
+    valor_unitario: str = "0.00"
+    valor_total: str = "0.00"
+
+
+class RequisicaoRevisao(BaseModel):
+    itens: list[ItemRevisao]
+    total: str | None = None
+    desconto: str | None = None
+    valor_pago: str | None = None
+    aprovar: bool = False
+
+
+@app.post("/api/cupom/{chave}/revisar")
+async def revisar_cupom(chave: str, req: RequisicaoRevisao, _quem: Morador, con: Banco):
+    """Atualiza itens de um cupom e permite aprovação para sair da fila de revisão."""
+    if not cupons.existe(con, chave):
+        raise HTTPException(404, "cupom não encontrado")
+
+    novos_itens = [
+        {
+            "descricao": it.descricao,
+            "quantidade": it.quantidade,
+            "unidade": it.unidade,
+            "valor_unitario": it.valor_unitario,
+            "valor_total": it.valor_total,
+        }
+        for it in req.itens
+    ]
+
+    total_dec = Decimal(req.total) if req.total is not None else None
+    desc_dec = Decimal(req.desconto) if req.desconto is not None else None
+    pago_dec = Decimal(req.valor_pago) if req.valor_pago is not None else None
+
+    ok = cupons.revisar(
+        con, chave, novos_itens,
+        total=total_dec, desconto=desc_dec, valor_pago=pago_dec, aprovar=req.aprovar,
+    )
+    if not ok:
+        raise HTTPException(500, "falha ao atualizar cupom")
+
+    return responder({"ok": True, "cupom": cupons.ler(con, chave)})
+
+
+@app.get("/api/falhas")
+async def listar_falhas(_: Morador, con: Banco):
+    """Fotos que não deram leitura de QR e ficaram salvas para análise."""
+    pasta = config().dados / "falhas"
+    if not pasta.is_dir():
+        return responder({"falhas": []})
+
+    cupons_banco = con.execute(
+        "SELECT c.chave, c.emitido_em, c.criado_em, c.completo, e.razao "
+        "FROM cupom c JOIN estabelecimento e ON e.cnpj = c.cnpj"
+    ).fetchall()
+
+    fotos = []
+    for arq in sorted(pasta.glob("*.jpg"), reverse=True):
+        stat = arq.stat()
+        data_foto = None
+        try:
+            data_foto = datetime.strptime(arq.stem, "%Y-%m-%d_%H%M%S")
+        except ValueError:
+            pass
+
+        cupom_casado = None
+        if data_foto:
+            for c in cupons_banco:
+                try:
+                    dt_c = datetime.fromisoformat(c["criado_em"])
+                    if abs((data_foto - dt_c).total_seconds()) <= 900:
+                        cupom_casado = {
+                            "chave": c["chave"],
+                            "loja": c["razao"],
+                            "completo": bool(c["completo"]),
+                            "criado_em": c["criado_em"],
+                        }
+                        break
+                except (ValueError, TypeError):
+                    continue
+
+        fotos.append({
+            "arquivo": arq.name,
+            "data": data_foto.isoformat(sep=" ") if data_foto else "",
+            "tamanho_kb": stat.st_size // 1024,
+            "cupom": cupom_casado,
+        })
+    return responder({"falhas": fotos})
+
+
+@app.get("/api/falha/{nome}")
+async def ver_foto_falha(nome: str, _: Morador):
+    """Serve uma imagem salva de falha de QR Code."""
+    if not re.match(r"^[\w.-]+\.(jpg|jpeg|png)$", nome, re.IGNORECASE):
+        raise HTTPException(400, "nome de arquivo inválido")
+    caminho = config().dados / "falhas" / nome
+    if not caminho.is_file():
+        raise HTTPException(404, "imagem não encontrada")
+    return FileResponse(caminho, media_type="image/jpeg")
+
+
+@app.get("/api/gastos")
+async def gastos(_: Morador, con: Banco, mes: str = ""):
+    return responder({"resumo": relatorios.resumo_do_mes(con, mes or None),
+                      "meses": relatorios.meses_com_gasto(con)})
+
+
+@app.get("/api/produtos")
+async def listar_produtos(_: Morador, con: Banco, busca: str = ""):
+    return responder({"produtos": relatorios.produtos(con, busca)})
+
+
+@app.get("/api/produto/{produto_id}")
+async def ver_produto(produto_id: int, _: Morador, con: Banco):
+    achado = relatorios.historico_do_produto(con, produto_id)
+    if not achado:
+        raise HTTPException(404, "produto não encontrado")
+    return responder(achado)
+
+
+# ── unificar produtos ────────────────────────────────────────────────────────
+class Unir(BaseModel):
+    manter: int
+    juntar: int
+
+
+class Recusa(BaseModel):
+    desc_a: str
+    desc_b: str
+
+
+@app.get("/api/unificar")
+async def ver_candidatos(_: Morador, con: Banco):
+    """Pares que parecem o mesmo produto. SUGESTÃO — nada acontece sozinho."""
+    return responder({"candidatos": unificacao.candidatos(con)})
+
+
+@app.post("/api/unificar")
+async def unir(uniao: Unir, _: Morador, con: Banco):
+    try:
+        return responder(unificacao.unificar(con, uniao.manter, uniao.juntar))
+    except ValueError as erro:
+        raise HTTPException(400, str(erro)) from erro
+
+
+@app.post("/api/unificar/recusar")
+async def recusar_par(recusa: Recusa, _: Morador, con: Banco):
+    """"Não são a mesma coisa" — para o par não voltar a ser sugerido."""
+    unificacao.recusar(con, recusa.desc_a, recusa.desc_b)
+    return responder({"ok": True})
+
+
+# ── lista de compras ─────────────────────────────────────────────────────────
+class NovaLista(BaseModel):
+    nome: str = "compras"
+
+
+class ItemDaLista(BaseModel):
+    produto_id: int
+    quantidade: Decimal = Decimal("1")
+
+
+@app.get("/api/listas")
+async def ver_listas(_: Morador, con: Banco):
+    return responder({"listas": listas.listar(con), "sugestoes": listas.sugerir(con)})
+
+
+@app.post("/api/listas")
+async def nova_lista(dados: NovaLista, quem: Morador, con: Banco):
+    return responder({"id": listas.criar(con, dados.nome, quem)})
+
+
+@app.get("/api/lista/{lista_id}")
+async def ver_lista(lista_id: int, _: Morador, con: Banco):
+    return responder({"itens": listas.itens(con, lista_id),
+                      "comparacao": listas.comparar(con, lista_id)})
+
+
+@app.post("/api/lista/{lista_id}/item")
+async def por_item(lista_id: int, item: ItemDaLista, _: Morador, con: Banco):
+    listas.por_produto(con, lista_id, item.produto_id, item.quantidade)
+    return responder({"ok": True})
+
+
+@app.delete("/api/lista/{lista_id}/item/{produto_id}")
+async def tirar_item(lista_id: int, produto_id: int, _: Morador, con: Banco):
+    listas.tirar(con, lista_id, produto_id)
+    return responder({"ok": True})
+
+
+# Rota SÍNCRONA de propósito: o cliente do Menor Preço espaça as consultas com
+# sleep, e num handler async isso travaria o laço de eventos inteiro. Sendo
+# `def`, o FastAPI a roda numa thread e a PWA continua respondendo.
+@app.post("/api/lista/{lista_id}/pesquisar")
+def pesquisar_precos(lista_id: int, request: Request):
+    """Consulta o Menor Preço para os itens da lista. **Só a pedido de gente.**
+
+    É a única rota que fala com a API do estado, e ela existe porque alguém
+    apertou um botão. Antes do lote vai o canário: se a API estiver servindo
+    base de teste, descobrir aqui custa uma consulta em vez do lote inteiro.
+    """
+    con = request.app.state.con
+    cliente = menor_preco.MenorPreco(con)
+    relatorio = {"consultados": 0, "guardados": 0, "recusados": [], "sem_resultado": []}
+
+    if not cliente.canario():
+        raise HTTPException(
+            503, "a API do Menor Preço está devolvendo base de teste agora — "
+                 "nada foi gravado. Tente mais tarde.")
+
+    for item in listas.itens(con, lista_id):
+        try:
+            achados = cliente.buscar(gtin=item["gtin"] or "",
+                                     termo="" if item["gtin"] else item["descricao"])
+        except menor_preco.TetoAtingido as erro:
+            relatorio["teto"] = str(erro)
+            break
+        except menor_preco.RespostaSuspeita as erro:
+            relatorio["recusados"].append({"item": item["descricao"], "porque": str(erro)})
+            continue
+        relatorio["consultados"] += 1
+        if not achados:
+            relatorio["sem_resultado"].append(item["descricao"])
+            continue
+        relatorio["guardados"] += menor_preco.guardar(con, item["produto_id"], achados)
+
+    relatorio["comparacao"] = listas.comparar(con, lista_id)
+    return responder(relatorio)
+
+
+# ── descobrir código de barras ───────────────────────────────────────────────
+@app.get("/api/catalogo/status")
+def status_catalogo(_: Morador):
+    """Estatísticas do catálogo satélite offline (dados/catalogo.db)."""
+    con_cat = catalogo.conectar_catalogo(somente_leitura=True)
+    if not con_cat:
+        return responder({"disponivel": False, "mensagem": "Catálogo offline não inicializado."})
+    stats = catalogo.estatisticas_catalogo(con_cat)
+    con_cat.close()
+    return responder({"disponivel": True, **stats})
+
+
+@app.get("/api/produto/{produto_id}/candidatos")
+def buscar_candidatos_gtin(produto_id: int, request: Request, _: Morador):
+    """Busca no Menor Preço e catálogo os códigos candidatos para um produto ambíguo."""
+    con = request.app.state.con
+    prod = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    if not prod:
+        raise HTTPException(404, "produto não encontrado")
+
+    descricao = prod["descricao_canonica"]
+    cliente = menor_preco.MenorPreco(con)
+    try:
+        achados = cliente.buscar(termo=descricao)
+    except menor_preco.TetoAtingido as erro:
+        raise HTTPException(429, str(erro)) from erro
+    except Exception:
+        achados = []
+
+    candidatos_map = {}
+    for a in achados:
+        gtin = str(a.get("gtin") or "").strip()
+        if not gtin or not sanidade.digito_gtin_confere(gtin):
+            continue
+        if gtin not in candidatos_map:
+            candidatos_map[gtin] = {
+                "gtin": gtin,
+                "descricao": a.get("descricao") or descricao,
+                "preco": float(a.get("preco") or 0),
+                "loja": a.get("loja") or "Mercado local",
+                "data": a.get("data") or "",
+                "ocorrencias": 1,
+            }
+        else:
+            candidatos_map[gtin]["ocorrencias"] += 1
+
+    cat = catalogo.conectar_catalogo(somente_leitura=True)
+    if cat:
+        for item in catalogo.buscar_por_termo(cat, descricao, limite=5):
+            g = item["gtin"]
+            if g not in candidatos_map:
+                candidatos_map[g] = {
+                    "gtin": g,
+                    "descricao": item["nome"],
+                    "preco": 0.0,
+                    "loja": item.get("marca") or "Catálogo",
+                    "data": "",
+                    "ocorrencias": 1,
+                }
+        cat.close()
+
+    return responder(
+        {
+            "produto_id": produto_id,
+            "descricao": descricao,
+            "candidatos": list(candidatos_map.values()),
+        }
+    )
+
+
+class DefinirGtin(BaseModel):
+    gtin: str
+
+
+@app.post("/api/produto/{produto_id}/gtin")
+def definir_gtin_produto(produto_id: int, dados: DefinirGtin, request: Request, _: Morador):
+    """Atribui manualmente um GTIN ao produto e engatilha busca de metadados no catálogo."""
+    gtin_limpo = re.sub(r"\D", "", dados.gtin)
+    if not gtin_limpo or not sanidade.digito_gtin_confere(gtin_limpo):
+        raise HTTPException(400, "código de barras inválido (dígito verificador incorreto)")
+
+    con = request.app.state.con
+    prod = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    if not prod:
+        raise HTTPException(404, "produto não encontrado")
+
+    with con:
+        con.execute(
+            "UPDATE produto "
+            "SET gtin = ?, gtin_buscado_em = datetime('now','localtime') "
+            "WHERE id = ?",
+            (gtin_limpo, produto_id),
+        )
+
+    # Registra também na tabela de variantes como padrão
+    catalogo.salvar_variantes_do_produto(
+        con, produto_id, [{"gtin": gtin_limpo, "eh_padrao": 1, "origem": "manual"}]
+    )
+
+    # Enriquece via catálogo local/online imediatamente
+    enriquecimento.enriquecer_local(con, produto_id)
+    prod_atualizado = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    return responder({"ok": True, "produto": dict(prod_atualizado)})
+
+
+class VarianteItem(BaseModel):
+    gtin: str
+    nome: str | None = None
+    sabor: str | None = None
+    marca: str | None = None
+    nutriscore: str | None = None
+    nova_group: int | None = None
+    foto_url: str | None = None
+    eh_padrao: bool = False
+
+
+class SalvarVariantes(BaseModel):
+    variantes: list[VarianteItem]
+    gtin_padrao: str | None = None
+
+
+@app.get("/api/produto/{produto_id}/variantes")
+def obter_variantes_produto(produto_id: int, request: Request, _: Morador):
+    """Lista as variantes e sabores registrados para um produto."""
+    con = request.app.state.con
+    prod = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    if not prod:
+        raise HTTPException(404, "produto não encontrado")
+    vars = catalogo.listar_variantes(con, produto_id)
+    return responder({"produto_id": produto_id, "variantes": vars})
+
+
+@app.post("/api/produto/{produto_id}/variantes")
+def salvar_variantes_produto(produto_id: int, dados: SalvarVariantes, request: Request, _: Morador):
+    """Associa uma lista de variantes/sabores a um produto pai."""
+    con = request.app.state.con
+    prod = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    if not prod:
+        raise HTTPException(404, "produto não encontrado")
+
+    vars_dict = [v.model_dump() for v in dados.variantes]
+    inseridos = catalogo.salvar_variantes_do_produto(
+        con, produto_id, vars_dict, gtin_padrao=dados.gtin_padrao
+    )
+    with con:
+        con.execute(
+            "UPDATE produto SET gtin_buscado_em = datetime('now','localtime') WHERE id = ?",
+            (produto_id,),
+        )
+    vars = catalogo.listar_variantes(con, produto_id)
+    prod_atualizado = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    return responder({
+        "ok": True,
+        "inseridos": inseridos,
+        "produto": dict(prod_atualizado),
+        "variantes": vars,
+    })
+
+
+@app.post("/api/produto/{produto_id}/variante/{gtin}/padrao")
+def definir_variante_padrao_produto(produto_id: int, gtin: str, request: Request, _: Morador):
+    """Define uma variante como a padrão da linha."""
+    con = request.app.state.con
+    sucesso = catalogo.definir_variante_padrao(con, produto_id, gtin)
+    if not sucesso:
+        raise HTTPException(404, "variante não encontrada para este produto")
+    prod_atualizado = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    return responder({"ok": True, "produto": dict(prod_atualizado)})
+
+
+@app.delete("/api/produto/{produto_id}/variante/{gtin}")
+def remover_variante_produto(produto_id: int, gtin: str, request: Request, _: Morador):
+    """Desvincula uma variante do produto."""
+    con = request.app.state.con
+    catalogo.remover_variante(con, produto_id, gtin)
+    prod_atualizado = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    return responder({"ok": True, "produto": dict(prod_atualizado)})
+
+
+class AssociarItemVariante(BaseModel):
+    gtin: str | None = None
+    sabor: str | None = None
+    lembrar_loja: bool = True
+    retroagir: bool = False
+
+
+@app.post("/api/item/{item_id}/variante")
+def associar_variante_item(
+    item_id: int, dados: AssociarItemVariante, request: Request, _: Morador
+):
+    """Associa um item de cupom a um GTIN/variante e sabor específico."""
+    con = request.app.state.con
+    item = con.execute(
+        """SELECT i.*, c.cnpj
+             FROM item i JOIN cupom c ON c.chave = i.chave
+            WHERE i.id = ?""",
+        (item_id,),
+    ).fetchone()
+    if not item:
+        raise HTTPException(404, "item não encontrado")
+
+    gtin_raw = (dados.gtin or "").strip()
+    gtin_limpo = catalogo.normalizar_gtin(gtin_raw) if gtin_raw else None
+    if gtin_limpo and not sanidade.digito_gtin_confere(gtin_limpo):
+        raise HTTPException(400, "código de barras (GTIN) inválido")
+
+    sabor = (dados.sabor or "").strip() or None
+    if not gtin_limpo and not sabor:
+        raise HTTPException(400, "Informe ao menos o código de barras (GTIN) ou o sabor")
+
+    nome_variante = None
+    info_cat = None
+    if gtin_limpo:
+        cat = catalogo.conectar_catalogo(somente_leitura=True)
+        info_cat = (
+            catalogo.buscar_por_gtin(cat, gtin_limpo, consultar_online_se_faltar=True)
+            if cat
+            else None
+        )
+        if cat:
+            cat.close()
+        if not info_cat:
+            info_cat = catalogo.consultar_openfoodfacts_api(gtin_limpo)
+
+        if info_cat:
+            nome_variante = info_cat.get("nome")
+            if not sabor:
+                sabor = info_cat.get("sabor") or catalogo.extrair_sabor(
+                    info_cat.get("nome", ""), info_cat.get("marca")
+                )
+
+    produto_id = item["produto_id"]
+    if not gtin_limpo and sabor and produto_id:
+        var_existente = con.execute(
+            """SELECT gtin FROM produto_variante
+                WHERE produto_id = ? AND (LOWER(sabor) = LOWER(?) OR LOWER(nome) = LOWER(?))
+                LIMIT 1""",
+            (produto_id, sabor, sabor),
+        ).fetchone()
+        if var_existente:
+            gtin_limpo = var_existente["gtin"]
+
+    if produto_id and gtin_limpo:
+        catalogo.salvar_variantes_do_produto(
+            con,
+            produto_id,
+            [
+                {
+                    "gtin": gtin_limpo,
+                    "sabor": sabor,
+                    "nome": nome_variante or item["descricao"],
+                    "marca": info_cat.get("marca") if info_cat else None,
+                    "nutriscore": info_cat.get("nutriscore") if info_cat else None,
+                    "nova_group": info_cat.get("nova_group") if info_cat else None,
+                    "foto_url": info_cat.get("foto_url") if info_cat else None,
+                    "origem": "associacao_item",
+                }
+            ],
+        )
+
+    with con:
+        con.execute(
+            """UPDATE item
+                  SET gtin_variante = ?, sabor_adicional = ?
+                WHERE id = ?""",
+            (gtin_limpo, sabor, item_id),
+        )
+
+        if dados.lembrar_loja and item["codigo_loja"] and produto_id:
+            con.execute(
+                """INSERT INTO codigo_loja_produto
+                       (cnpj, codigo_loja, produto_id, gtin, sabor, atualizado_em)
+                   VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                   ON CONFLICT(cnpj, codigo_loja) DO UPDATE SET
+                       produto_id = excluded.produto_id,
+                       gtin = excluded.gtin,
+                       sabor = excluded.sabor,
+                       atualizado_em = excluded.atualizado_em""",
+                (item["cnpj"], item["codigo_loja"], produto_id, gtin_limpo, sabor),
+            )
+
+        itens_retroagidos = 0
+        if dados.retroagir and item["codigo_loja"]:
+            cur = con.execute(
+                """UPDATE item
+                      SET gtin_variante = COALESCE(?, gtin_variante),
+                          sabor_adicional = ?,
+                          produto_id = COALESCE(?, produto_id)
+                    WHERE codigo_loja = ?
+                      AND id != ?
+                      AND chave IN (SELECT chave FROM cupom WHERE cnpj = ?)""",
+                (gtin_limpo, sabor, produto_id, item["codigo_loja"], item_id, item["cnpj"]),
+            )
+            itens_retroagidos = cur.rowcount
+
+    item_atualizado = con.execute("SELECT * FROM item WHERE id = ?", (item_id,)).fetchone()
+    return responder({
+        "ok": True,
+        "item": dict(item_atualizado),
+        "sabor": sabor,
+        "gtin": gtin_limpo,
+        "retroagidos": itens_retroagidos,
+    })
+
+
+class DesmembrarVariante(BaseModel):
+    gtin: str
+    novo_nome: str | None = None
+    codigo_loja: str | None = None
+    cnpj: str | None = None
+
+
+@app.post("/api/produto/{produto_id}/desmembrar")
+def desmembrar_produto_variante(
+    produto_id: int, dados: DesmembrarVariante, request: Request, _: Morador
+):
+    """Separa uma variante em um novo produto autônomo, migrando compras daquele código de loja."""
+    con = request.app.state.con
+    prod_orig = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    if not prod_orig:
+        raise HTTPException(404, "produto não encontrado")
+
+    gtin_limpo = catalogo.normalizar_gtin(dados.gtin)
+    if not gtin_limpo or not sanidade.digito_gtin_confere(gtin_limpo):
+        raise HTTPException(400, "código de barras (GTIN) inválido para desmembrar")
+
+    var = con.execute(
+        "SELECT * FROM produto_variante WHERE produto_id = ? AND gtin = ?",
+        (produto_id, gtin_limpo),
+    ).fetchone()
+
+    if dados.novo_nome and dados.novo_nome.strip():
+        novo_nome = dados.novo_nome.strip()
+    elif (
+        var
+        and var["nome"]
+        and var["nome"] != "Variante"
+        and var["nome"] != prod_orig["descricao_canonica"]
+    ):
+        novo_nome = var["nome"].strip()
+    elif var and var["sabor"]:
+        novo_nome = f"{prod_orig['descricao_canonica']} {var['sabor']}".strip()
+    else:
+        novo_nome = f"{prod_orig['descricao_canonica']} (EAN {gtin_limpo})"
+
+    marca = (var["marca"] if var else None) or prod_orig["marca"]
+    nutriscore = (var["nutriscore"] if var else None) or prod_orig["nutriscore"]
+    nova_group = (var["nova_group"] if var else None) or prod_orig["nova_group"]
+    foto_url = (var["foto_url"] if var else None) or prod_orig["foto_url"]
+
+    with con:
+        cur = con.execute(
+            """INSERT INTO produto (
+                   gtin, ncm, descricao_canonica, marca, nutriscore,
+                   nova_group, foto_url, is_granel, acompanhar
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+            (
+                gtin_limpo,
+                prod_orig["ncm"],
+                novo_nome,
+                marca,
+                nutriscore,
+                nova_group,
+                foto_url,
+                prod_orig["acompanhar"],
+            ),
+        )
+        novo_id = cur.lastrowid
+
+        con.execute(
+            "DELETE FROM produto_variante WHERE produto_id = ? AND gtin = ?",
+            (produto_id, gtin_limpo),
+        )
+        con.execute(
+            """INSERT INTO produto_variante (
+                   produto_id, gtin, nome, sabor, marca, nutriscore,
+                   nova_group, foto_url, eh_padrao, origem, criado_em
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'desmembrado', datetime('now', 'localtime'))""",
+            (
+                novo_id,
+                gtin_limpo,
+                novo_nome,
+                var["sabor"] if var else None,
+                marca,
+                nutriscore,
+                nova_group,
+                foto_url,
+            ),
+        )
+
+        if prod_orig["gtin"] == gtin_limpo:
+            outra_var = con.execute(
+                """SELECT * FROM produto_variante
+                    WHERE produto_id = ?
+                    ORDER BY eh_padrao DESC LIMIT 1""",
+                (produto_id,),
+            ).fetchone()
+            if outra_var:
+                con.execute(
+                    "UPDATE produto_variante SET eh_padrao = 1 WHERE produto_id = ? AND gtin = ?",
+                    (produto_id, outra_var["gtin"]),
+                )
+                con.execute(
+                    """UPDATE produto
+                          SET gtin = ?,
+                              marca = COALESCE(?, marca),
+                              nutriscore = COALESCE(?, nutriscore),
+                              nova_group = COALESCE(?, nova_group),
+                              foto_url = COALESCE(?, foto_url)
+                        WHERE id = ?""",
+                    (
+                        outra_var["gtin"],
+                        outra_var["marca"],
+                        outra_var["nutriscore"],
+                        outra_var["nova_group"],
+                        outra_var["foto_url"],
+                        produto_id,
+                    ),
+                )
+            else:
+                con.execute(
+                    "UPDATE produto SET gtin = NULL WHERE id = ?",
+                    (produto_id,),
+                )
+
+        if dados.codigo_loja:
+            con.execute(
+                """UPDATE codigo_loja_produto
+                      SET produto_id = ?
+                    WHERE produto_id = ?
+                      AND codigo_loja = ?
+                      AND (cnpj = ? OR ? IS NULL)""",
+                (novo_id, produto_id, dados.codigo_loja, dados.cnpj, dados.cnpj),
+            )
+            cnpjs_para_mapear = [dados.cnpj] if dados.cnpj else [
+                r["cnpj"]
+                for r in con.execute(
+                    """SELECT DISTINCT c.cnpj
+                         FROM item i JOIN cupom c ON c.chave = i.chave
+                        WHERE i.produto_id = ? AND i.codigo_loja = ?""",
+                    (novo_id, dados.codigo_loja),
+                ).fetchall()
+            ]
+            for c in cnpjs_para_mapear:
+                if c:
+                    con.execute(
+                        """INSERT INTO codigo_loja_produto
+                               (cnpj, codigo_loja, produto_id, gtin, sabor, atualizado_em)
+                           VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                           ON CONFLICT(cnpj, codigo_loja) DO UPDATE SET
+                               produto_id = excluded.produto_id,
+                               gtin = excluded.gtin,
+                               sabor = excluded.sabor,
+                               atualizado_em = excluded.atualizado_em""",
+                        (c, dados.codigo_loja, novo_id, gtin_limpo, var["sabor"] if var else None),
+                    )
+        con.execute(
+            """UPDATE codigo_loja_produto
+                  SET produto_id = ?
+                WHERE produto_id = ? AND gtin = ?""",
+            (novo_id, produto_id, gtin_limpo),
+        )
+
+        sabor_var = var["sabor"] if var else None
+        if dados.codigo_loja:
+            con.execute(
+                """UPDATE item
+                      SET produto_id = ?,
+                          gtin_variante = COALESCE(gtin_variante, ?),
+                          sabor_adicional = COALESCE(sabor_adicional, ?)
+                    WHERE produto_id = ?
+                      AND (
+                          gtin_variante = ?
+                          OR (codigo_loja = ? AND (
+                              ? IS NULL OR chave IN (SELECT chave FROM cupom WHERE cnpj = ?)
+                          ))
+                      )""",
+                (
+                    novo_id,
+                    gtin_limpo,
+                    sabor_var,
+                    produto_id,
+                    gtin_limpo,
+                    dados.codigo_loja,
+                    dados.cnpj,
+                    dados.cnpj,
+                ),
+            )
+        else:
+            con.execute(
+                """UPDATE item
+                      SET produto_id = ?,
+                          gtin_variante = COALESCE(gtin_variante, ?),
+                          sabor_adicional = COALESCE(sabor_adicional, ?)
+                    WHERE produto_id = ? AND gtin_variante = ?""",
+                (novo_id, gtin_limpo, sabor_var, produto_id, gtin_limpo),
+            )
+
+        con.execute(
+            """INSERT OR IGNORE INTO preco
+                   (produto_id, cnpj, unitario_centavos, observado_em, fonte)
+               SELECT DISTINCT ?, c.cnpj, i.unitario_centavos, c.emitido_em, 'cupom'
+                 FROM item i JOIN cupom c ON c.chave = i.chave
+                WHERE i.produto_id = ?""",
+            (novo_id, novo_id),
+        )
+        con.execute(
+            """DELETE FROM preco
+                WHERE produto_id = ?
+                  AND fonte = 'cupom'
+                  AND (cnpj, unitario_centavos, observado_em) NOT IN (
+                      SELECT c.cnpj, i.unitario_centavos, c.emitido_em
+                        FROM item i JOIN cupom c ON c.chave = i.chave
+                       WHERE i.produto_id = ?
+                  )""",
+            (produto_id, produto_id),
+        )
+
+    enriquecimento.enriquecer_local(con, novo_id)
+    novo_prod = con.execute("SELECT * FROM produto WHERE id = ?", (novo_id,)).fetchone()
+
+    return responder({
+        "ok": True,
+        "novo_produto_id": novo_id,
+        "novo_produto": dict(novo_prod),
+        "gtin": gtin_limpo,
+    })
+
+
+@app.get("/api/catalogo/ean/{gtin}")
+def buscar_metadados_gtin(gtin: str, _: Morador):
+    """Consulta metadados de um GTIN/EAN no catálogo offline ou Open Food Facts."""
+    gtin_limpo = catalogo.normalizar_gtin(gtin)
+    if not gtin_limpo or not sanidade.digito_gtin_confere(gtin_limpo):
+        raise HTTPException(400, "código de barras (GTIN) inválido")
+    meta = enriquecimento.buscar_metadados_ean(gtin_limpo)
+    if not meta:
+        raise HTTPException(404, "código de barras não encontrado no catálogo")
+    return responder(meta)
+
+
+@app.post("/api/enriquecer/local")
+def enriquecer_local_produtos(_: Morador, con: Banco, quantos: int = 100):
+    """Enriquece produtos pendentes usando o catálogo satélite offline."""
+    relatorio = enriquecimento.enriquecer_pendentes_local(con, limite=quantos)
+    return responder(relatorio)
+
+
+@app.get("/api/enriquecer")
+async def ver_pendentes(_: Morador, con: Banco):
+    return responder({"pendentes": enriquecimento.pendentes(con)})
+
+
+# Síncrona pelo mesmo motivo da pesquisa de preços: o cliente espaça as
+# consultas com sleep, e num handler async isso travaria o laço de eventos.
+@app.post("/api/enriquecer")
+def enriquecer_produtos(request: Request, quantos: int = 5):
+    """Descobre o código de barras dos produtos mais comprados. **A pedido.**
+
+    `quantos` é baixo de propósito: cada produto custa uma consulta, e o teto
+    por hora é o que mantém esta app do lado certo do termo de uso.
+    """
+    con = request.app.state.con
+    cliente = menor_preco.MenorPreco(con)
+    if not cliente.canario():
+        raise HTTPException(
+            503, "a API do Menor Preço está devolvendo base de teste agora — "
+                 "nada foi gravado. Tente mais tarde.")
+
+    relatorio = {"identificados": [], "sem_certeza": []}
+    for pendente in enriquecimento.pendentes(con, quantos):
+        try:
+            r = enriquecimento.enriquecer(con, cliente, pendente["produto_id"])
+        except menor_preco.TetoAtingido as erro:
+            relatorio["teto"] = str(erro)
+            break
+        except menor_preco.RespostaSuspeita as erro:
+            relatorio["sem_certeza"].append(
+                {"descricao": pendente["descricao"], "motivo": f"resposta recusada: {erro}"})
+            continue
+        alvo = "identificados" if r["novo"] else "sem_certeza"
+        relatorio[alvo].append({"descricao": r["descricao"], "gtin": r.get("gtin"),
+                                "motivo": r["motivo"]})
+    relatorio["restantes"] = len(enriquecimento.pendentes(con, 999))
+    return responder(relatorio)
+
+
+# ── a PWA ────────────────────────────────────────────────────────────────────
+@app.get("/")
+async def raiz():
+    return FileResponse(WEB / "index.html")
+
+
+app.mount("/", StaticFiles(directory=WEB), name="web")

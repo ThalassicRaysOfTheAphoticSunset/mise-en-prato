@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111512">
+<title>cupomzinho</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/estilo.css">
+<link rel="icon" href="/icone.svg" type="image/svg+xml">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="cupomzinho">
+</head>
+<body>
+<header>
+  <h1>cupomzinho</h1>
+  <span id="quem" class="quem"></span>
+</header>
+
+<nav id="abas">
+  <button data-aba="enviar" class="ativa">Enviar</button>
+  <button data-aba="gastos">Gastos</button>
+  <button data-aba="produtos">Produtos</button>
+  <button data-aba="lista">Lista</button>
+  <button data-aba="revisao" id="btn-revisao">Revisão</button>
+</nav>
+
+<main>
+  <!-- ── enviar ─────────────────────────────────────────────────────────── -->
+  <section id="aba-enviar">
+    <label class="botao-grande" for="foto">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l2-2h6l2 2h3v12H4z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="13" r="3.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      Fotografar o QR do cupom
+    </label>
+    <input id="foto" type="file" accept="image/*" capture="environment" hidden>
+    <p class="dica">Deixe o quadradinho preencher a tela. Não precisa pegar o
+      cupom inteiro — só o QR, sem sombra em cima.</p>
+
+    <details class="alternativa">
+      <summary>ou colar o link do cupom</summary>
+      <p class="dica">No iPhone: aponte o app Câmera para o QR, toque na
+        notificação, copie o endereço e cole aqui.</p>
+      <form id="form-link">
+        <input id="link" type="url" inputmode="url" placeholder="https://www.fazenda.pr.gov.br/nfce/qrcode?p=…" required>
+        <button type="submit">Registrar</button>
+      </form>
+    </details>
+
+    <details class="alternativa" id="alt-chave">
+      <summary>ou digitar a chave de acesso (QR estragado)</summary>
+      <p class="dica">São os 44 números impressos logo acima do QR, em grupos de
+        quatro. O portal do estado pede que você leia um captcha — é ele que
+        prova que tem gente deste lado, e não um robô.</p>
+      <form id="form-chave">
+        <input id="chave" type="text" inputmode="numeric" autocomplete="off"
+               placeholder="4126 0877 7522 9301 6191 …" required maxlength="54">
+        <div id="chave-status" style="font-size:.82rem;margin-top:.3rem"></div>
+        <div id="captcha-caixa" hidden style="margin-top:.8rem">
+          <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+            <img id="captcha-img" alt="as letras que o portal da Fazenda está pedindo"
+                 width="180" height="60" title="Toque para ampliar 1.5x"
+                 onclick="this.classList.toggle('ampliado')">
+            <button type="button" id="captcha-outro" class="acao">outra imagem</button>
+            <span id="captcha-timer" class="fraca" style="font-size:.82rem"></span>
+          </div>
+          <input id="captcha" type="text" inputmode="text" autocomplete="off"
+                 autocapitalize="characters" autocorrect="off" spellcheck="false"
+                 style="text-transform:uppercase;margin-top:.5rem"
+                 placeholder="as letras da imagem" required>
+        </div>
+        <button type="submit" id="btn-submit-chave" style="margin-top:.8rem">Consultar pela chave</button>
+      </form>
+
+      <details class="alternativa">
+        <summary>não deu certo? registrar só o gasto</summary>
+        <p class="dica">Usa a chave digitada acima. Entra sem os itens e fica na
+          fila de revisão, para reconsultar quando o portal ajudar — o gasto do
+          mês não fica furado.</p>
+        <form id="form-manual">
+          <input id="manual-total" type="text" inputmode="decimal"
+                 placeholder="total do cupom, 106,74" required>
+          <input id="manual-data" type="date" required>
+          <button type="submit">Registrar o gasto</button>
+        </form>
+      </details>
+    </details>
+
+    <details class="alternativa" id="alt-html">
+      <summary>ou enviar arquivo HTML da SEFAZ</summary>
+      <p class="dica">Se você baixou o HTML da consulta no navegador (ex: DOCUMENTO AUXILIAR...), selecione o arquivo aqui.</p>
+      <input id="input-html" type="file" accept=".html,.htm" hidden>
+      <label for="input-html" class="acao" style="display:inline-block;cursor:pointer">Selecionar arquivo HTML</label>
+    </details>
+
+    <div id="envio-estado" class="estado" hidden></div>
+    <div id="cupom-lido"></div>
+
+    <h2>Últimos cupons</h2>
+    <div id="revisao"></div>
+    <div id="lista-cupons" class="lista"></div>
+  </section>
+
+  <!-- ── gastos ─────────────────────────────────────────────────────────── -->
+  <section id="aba-gastos" hidden>
+    <div id="gastos-topo"></div>
+    <div id="perfil-nutricional-secao" style="margin-top:1rem"></div>
+    <h2>Por mês</h2>
+    <div id="grafico-meses"></div>
+    <h2>Por mercado</h2>
+    <div id="por-loja"></div>
+    <h2>Por morador</h2>
+    <div id="por-morador"></div>
+    <h2>Maiores gastos do mês</h2>
+    <div id="maiores"></div>
+  </section>
+
+  <!-- ── produtos ───────────────────────────────────────────────────────── -->
+  <section id="aba-produtos" hidden>
+    <div id="enriquecer"></div>
+    <div id="unificar"></div>
+    <input id="busca" type="search" placeholder="buscar produto…" autocomplete="off">
+    <div id="lista-produtos" class="lista"></div>
+    <div id="produto-detalhe"></div>
+  </section>
+  <!-- ── lista ──────────────────────────────────────────────────────────── -->
+  <section id="aba-lista" hidden>
+    <div id="lista-cabeca"></div>
+    <div id="mercado-painel" class="mercado-painel" hidden></div>
+    <div id="lista-itens" class="lista"></div>
+    <div id="lista-acao"></div>
+    <div id="lista-estado" class="estado" hidden></div>
+    <div id="lista-comparacao"></div>
+    <div id="secao-sugestoes">
+      <h2>Adicionar do que a casa compra</h2>
+      <div id="lista-sugestoes" class="lista"></div>
+    </div>
+  </section>
+
+  <!-- ── revisão ──────────────────────────────────────────────────────────── -->
+  <!-- ── revisão ──────────────────────────────────────────────────────────── -->
+  <section id="aba-revisao" hidden>
+    <div id="revisao-bancada" class="cartao" hidden style="margin-bottom:1.5rem">
+      <div class="linha" style="margin-bottom:.8rem">
+        <div>
+          <strong id="bancada-loja">Revisando Cupom</strong>
+          <div id="bancada-meta" class="fraca"></div>
+        </div>
+        <button type="button" class="btn-preset" onclick="fecharBancadaRevisao()">✕ Fechar</button>
+      </div>
+
+      <div id="bancada-barra-centavos" class="barra-centavos"></div>
+
+      <div class="bancada-grade">
+        <div id="bancada-foto-bloco" class="bancada-foto-container" hidden>
+          <div class="barra-foto" style="margin-bottom:.4rem">
+            <button type="button" onclick="girarFotoBancada()">⟳ Girar 90°</button>
+            <button type="button" onclick="resetarFotoBancada()">↺ Reset</button>
+            <span class="fraca" style="font-size:.75rem;margin-left:auto">Pinch / Arraste</span>
+          </div>
+          <div class="area-foto-interativa" id="area-foto-interativa">
+            <img id="img-bancada-foto" alt="Foto do cupom para conferência">
+          </div>
+        </div>
+
+        <div class="bancada-itens-container">
+          <div class="linha" style="margin-bottom:.5rem">
+            <strong>Itens do Cupom</strong>
+            <button type="button" class="acao" onclick="adicionarLinhaItemBancada()"
+                    style="font-size:.8rem;padding:.25rem .65rem">+ Adicionar item</button>
+          </div>
+          <datalist id="catalogo-produtos-datalist"></datalist>
+          <div id="bancada-itens-lista" class="bancada-itens-lista"></div>
+
+          <div class="bancada-totais-linha" style="margin-top:.8rem;padding-top:.8rem;border-top:1px solid var(--borda)">
+            <div class="linha" style="gap:.6rem;flex-wrap:wrap">
+              <label style="flex:1;min-width:7rem">
+                <span class="fraca" style="font-size:.8rem">Desconto (R$)</span>
+                <input type="number" step="0.01" id="bancada-desconto" value="0.00" oninput="recalcularCentavosBancada()">
+              </label>
+              <label style="flex:1;min-width:7rem">
+                <span class="fraca" style="font-size:.8rem">Total Pago (R$)</span>
+                <input type="number" step="0.01" id="bancada-total-pago" oninput="recalcularCentavosBancada()">
+              </label>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:.6rem;margin-top:1rem;flex-wrap:wrap">
+            <button type="button" class="acao" onclick="salvarBancadaRevisao(true)" id="btn-aprovar-cupom" style="flex:1">✓ Aprovar Cupom</button>
+            <button type="button" onclick="salvarBancadaRevisao(false)" class="btn-preset" style="flex:1">Salvar Rascunho</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2>Cupons incompletos</h2>
+    <div id="revisao-cupons"></div>
+
+    <div id="revisao-destaque-foto" class="cartao" style="margin-top:1.2rem" hidden>
+      <div class="linha">
+        <strong id="destaque-foto-titulo">Foto</strong>
+        <span id="destaque-foto-selo" class="selo"></span>
+      </div>
+      <div id="destaque-foto-subtitulo" class="fraca" style="margin:.3rem 0 .6rem"></div>
+      <div class="visualizador-foto">
+        <div class="barra-foto">
+          <button type="button" id="btn-girar-destaque">⟳ Girar 90°</button>
+          <button type="button" id="btn-zoom-destaque">🔍 Ampliar</button>
+          <button type="button" id="btn-fechar-destaque">✕ Fechar</button>
+        </div>
+        <div class="conteiner-img">
+          <img id="img-destaque" alt="Foto do cupom">
+        </div>
+      </div>
+      <div id="destaque-foto-acoes" style="margin-top:.8rem"></div>
+    </div>
+
+    <h2>Fotos salvas (QR não identificado)</h2>
+    <p class="dica">Fotos cujo QR Code não pôde ser decodificado pelo servidor. Ficam guardadas para consulta e diagnóstico.</p>
+    <div id="revisao-galeria" class="grade-falhas"></div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

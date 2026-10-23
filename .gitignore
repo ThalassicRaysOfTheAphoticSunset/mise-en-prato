@@ -1,16 +1,17 @@
+@"
 # Ambientes e segredos
 .env
 .env.*
 !.env.example
 
-# Bancos SQLite e arquivos do modo WAL
+# Bancos SQLite e arquivos WAL
 *.db
 *.sqlite
 *.sqlite3
 *-wal
 *-shm
 
-# Uploads locais de fotos de receitas (dev e home)
+# Uploads locais de fotos de receitas
 uploads/
 data/
 
@@ -18,3 +19,8 @@ data/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+*.pyc
+
+# Docker
+.docker/
+"@ | Set-Content -Encoding UTF8 .gitignore

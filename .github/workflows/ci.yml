@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # exigência do pyzbar e do OCR local (Tesseract)
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libzbar0 tesseract-ocr tesseract-ocr-por
+
+      - run: pip install ".[dev]"
+
+      - run: ruff check .
+
+      - run: pytest -q
+
+      # O drill.sh do casa-srv varre o índice DELE e não enxerga esta pasta,
+      # que é repositório à parte. Então a verificação de segredo é aqui.
+      - name: segredo não entra no git
+        run: |
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "::error::.env está rastreado pelo git"; exit 1
+          fi
+          if grep -rIl --exclude-dir=.git -E '@(gmail|hotmail|outlook|yahoo)\.com' .; then
+            echo "::error::e-mail de morador em arquivo versionado"; exit 1
+          fi
+          echo "ok: nenhum segredo rastreado"

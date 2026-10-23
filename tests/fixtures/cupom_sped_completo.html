@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Portal SPED - Consulta Completa da NFC-e</title>
+</head>
+<body>
+  <div id="GeralXslt">
+    <div id="NFe" class="aba_sped">
+      <fieldset class="bloco_identificacao">
+        <legend class="informacao">Dados da NFC-e</legend>
+        <table class="box">
+          <tr>
+            <td>
+              <label>Chave de Acesso</label>
+              <span class="chave">4126 0976 4304 3800 0100 6500 1000 0123 4511 2345 6785</span>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <label>Número</label>
+              <span>12345</span>
+            </td>
+            <td>
+              <label>Série</label>
+              <span>1</span>
+            </td>
+            <td>
+              <label>Data de Emissão</label>
+              <span>15/09/2026 14:30:00</span>
+            </td>
+            <td>
+              <label>Protocolo de Autorização</label>
+              <span>141260001234567</span>
+            </td>
+          </tr>
+        </table>
+      </fieldset>
+
+      <fieldset class="bloco_emitente">
+        <legend class="informacao">Emitente</legend>
+        <table class="box">
+          <tr>
+            <td>
+              <label>Razão Social</label>
+              <span class="razao_social">MERCADO MODELO LTDA</span>
+            </td>
+            <td>
+              <label>CNPJ</label>
+              <span class="cnpj">76.430.438/0001-00</span>
+            </td>
+          </tr>
+          <tr>
+            <td colspan="2">
+              <label>Endereço</label>
+              <span class="endereco">RUA ALAGOAS, 100, , CENTRO, MEDIANEIRA, PR</span>
+            </td>
+          </tr>
+        </table>
+      </fieldset>
+
+      <fieldset class="bloco_produtos">
+        <legend class="informacao">Dados dos Produtos e Serviços</legend>
+        <table class="tabela_produtos">
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th>Descrição</th>
+              <th>Qtd.</th>
+              <th>Unidade Comercial</th>
+              <th>Valor Unitário</th>
+              <th>Valor Total</th>
+              <th>Código do Produto</th>
+              <th>Código NCM</th>
+              <th>Código EAN Comercial</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>CAFE PILAO TRADICIONAL 500G</td>
+              <td>1,000</td>
+              <td>UN</td>
+              <td>18,90</td>
+              <td>18,90</td>
+              <td>10203</td>
+              <td>09012100</td>
+              <td>7896005800119</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>LEITE INTEGRAL TIROL 1L</td>
+              <td>3,000</td>
+              <td>CX</td>
+              <td>4,50</td>
+              <td>13,50</td>
+              <td>20304</td>
+              <td>04012010</td>
+              <td>7891000100103</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>MACA FUJI KG</td>
+              <td>0,750</td>
+              <td>KG</td>
+              <td>8,00</td>
+              <td>6,00</td>
+              <td>501</td>
+              <td>08081000</td>
+              <td>SEM GTIN</td>
+            </tr>
+          </tbody>
+        </table>
+      </fieldset>
+
+      <fieldset class="bloco_totais">
+        <legend class="informacao">Totais</legend>
+        <table class="box">
+          <tr>
+            <td>
+              <label>Valor Total dos Produtos</label>
+              <span class="total_produtos">38,40</span>
+            </td>
+            <td>
+              <label>Desconto</label>
+              <span class="desconto">0,00</span>
+            </td>
+            <td>
+              <label>Valor Total da NFC-e</label>
+              <span class="total_nota">38,40</span>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <label>Forma de Pagamento</label>
+              <span class="forma_pagamento">Cartão de Débito</span>
+            </td>
+          </tr>
+        </table>
+      </fieldset>
+    </div>
+  </div>
+</body>
+</html>
