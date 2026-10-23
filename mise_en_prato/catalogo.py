@@ -3,7 +3,7 @@
 
 Mapeia bases abertas (Open Food Facts Brasil, CMED/ANVISA) num SQLite separado
 (dados/catalogo.db). Opera de forma totalmente desacoplada do banco transacional
-(dados/cupomzinho.db), garantindo zero contenção de locks e respostas em <1ms.
+(dados/mise_en_prato.db), garantindo zero contenção de locks e respostas em <1ms.
 """
 import csv
 import gzip
@@ -20,7 +20,7 @@ from .config import config
 from .nfce_pr import normalizar
 from .sanidade import digito_gtin_confere
 
-log = logging.getLogger("cupomzinho.catalogo")
+log = logging.getLogger("mise_en_prato.catalogo")
 
 
 def conectar_catalogo(
@@ -92,8 +92,8 @@ def consultar_openfoodfacts_api(gtin: str, timeout: int = 5) -> dict | None:
         url,
         headers={
             "User-Agent": (
-                "Cupomzinho - App Domestica "
-                "(https://github.com/ThalassicRaysOfTheAphoticSunset/cupomzinho)"
+                "mise_en_prato - App Domestica "
+                "(https://github.com/ThalassicRaysOfTheAphoticSunset/mise_en_prato)"
             )
         },
     )
@@ -791,7 +791,7 @@ def main():
     """CLI para gestão e ingestão de dumps no catálogo satélite."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Gestão do Catálogo Satélite do Cupomzinho")
+    parser = argparse.ArgumentParser(description="Gestão do Catálogo Satélite do mise_en_prato")
     sub = parser.add_subparsers(dest="comando")
 
     p_off = sub.add_parser(

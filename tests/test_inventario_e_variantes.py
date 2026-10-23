@@ -5,18 +5,18 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from cupomzinho.banco import conectar
-from cupomzinho.catalogo import (
+from mise_en_prato.banco import conectar
+from mise_en_prato.catalogo import (
     consultar_openfoodfacts_api,
     listar_variantes,
     parse_openfoodfacts_dict,
     salvar_variantes_do_produto,
 )
-from cupomzinho.cupons import gravar, ler
-from cupomzinho.enriquecimento import buscar_metadados_ean
-from cupomzinho.main import app
-from cupomzinho.nfce_pr import Cupom, Estabelecimento, Item
-from cupomzinho.unificacao import unificar
+from mise_en_prato.cupons import gravar, ler
+from mise_en_prato.enriquecimento import buscar_metadados_ean
+from mise_en_prato.main import app
+from mise_en_prato.nfce_pr import Cupom, Estabelecimento, Item
+from mise_en_prato.unificacao import unificar
 
 
 @pytest.fixture
@@ -126,7 +126,7 @@ def test_salvar_variantes_preenche_nome_real_off(con):
         },
     }
 
-    with patch("cupomzinho.catalogo.consultar_openfoodfacts_api") as mock_off:
+    with patch("mise_en_prato.catalogo.consultar_openfoodfacts_api") as mock_off:
         mock_off.return_value = parse_openfoodfacts_dict(resposta_api["product"])
         salvar_variantes_do_produto(
             con,
@@ -208,7 +208,7 @@ def test_api_associar_variante_item(tmp_path, monkeypatch):
     """Testa endpoint POST /api/item/{id}/variante com lembrar_loja e retroagir."""
     monkeypatch.setenv("DADOS", str(tmp_path))
     monkeypatch.setenv("EXIGIR_TAILNET", "false")
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
     config.cache_clear()
 
     db_path = tmp_path / "teste_api_item.db"
@@ -284,7 +284,7 @@ def test_api_desmembrar_produto(tmp_path, monkeypatch):
     """Testa endpoint POST /api/produto/{id}/desmembrar separando variante em produto autônomo."""
     monkeypatch.setenv("DADOS", str(tmp_path))
     monkeypatch.setenv("EXIGIR_TAILNET", "false")
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
     config.cache_clear()
 
     db_path = tmp_path / "teste_api_desmembrar.db"
@@ -402,7 +402,7 @@ def test_api_associar_sabor_sem_gtin(tmp_path, monkeypatch):
     """Testa associação apenas de sabor (sem GTIN), evitando criação de GTIN fake."""
     monkeypatch.setenv("DADOS", str(tmp_path))
     monkeypatch.setenv("EXIGIR_TAILNET", "false")
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
     config.cache_clear()
 
     db_path = tmp_path / "teste_sabor_sem_gtin.db"
@@ -464,7 +464,7 @@ def test_api_catalogo_ean_endpoint(tmp_path, monkeypatch):
     """Testa endpoint GET /api/catalogo/ean/{gtin}."""
     monkeypatch.setenv("DADOS", str(tmp_path))
     monkeypatch.setenv("EXIGIR_TAILNET", "false")
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
     config.cache_clear()
 
     db_path = tmp_path / "teste_api_catalogo.db"
@@ -472,7 +472,7 @@ def test_api_catalogo_ean_endpoint(tmp_path, monkeypatch):
     app.state.con = con
     client = TestClient(app)
 
-    with patch("cupomzinho.enriquecimento.buscar_metadados_ean") as mock_meta:
+    with patch("mise_en_prato.enriquecimento.buscar_metadados_ean") as mock_meta:
         mock_meta.return_value = {
             "gtin": "7896045102563",
             "nome": "Bebida Láctea Chocolatto 3 Corações 260ml",
@@ -520,7 +520,7 @@ def test_desmembrar_limpa_precos_pai_e_preenche_itens(tmp_path, monkeypatch):
     """Desmembrar deve remover preços obsoletos do pai e preencher sabor/EAN nos itens."""
     monkeypatch.setenv("DADOS", str(tmp_path))
     monkeypatch.setenv("EXIGIR_TAILNET", "false")
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
     config.cache_clear()
 
     db_path = tmp_path / "teste_desmembrar_precos.db"

@@ -13,9 +13,9 @@ from io import BytesIO
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 
-from cupomzinho.banco import conectar
-from cupomzinho.cupons import fila_de_revisao, gravar, ler
-from cupomzinho.ocr import (
+from mise_en_prato.banco import conectar
+from mise_en_prato.cupons import fila_de_revisao, gravar, ler
+from mise_en_prato.ocr import (
     interpretar_cupom_ocr,
     pre_processar_imagem,
     procurar_chave_nfce,
@@ -190,11 +190,11 @@ def test_ocr_itens_multilinha_e_desconto(con):
 def test_api_upload_foto_aciona_ocr_quando_nao_ha_qr(tmp_path, monkeypatch):
     monkeypatch.setenv("DADOS", str(tmp_path))
     monkeypatch.setenv("EXIGIR_TAILNET", "false")
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
     config.cache_clear()
     from fastapi.testclient import TestClient
 
-    from cupomzinho.main import app
+    from mise_en_prato.main import app
 
     linhas = [
         "PADARIA ARTESANAL",

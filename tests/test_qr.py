@@ -9,7 +9,7 @@ import pytest
 import qrcode
 from PIL import Image, ImageFilter
 
-from cupomzinho.qr import ler_qr
+from mise_en_prato.qr import ler_qr
 
 URL_QR = ("https://www.fazenda.pr.gov.br/nfce/qrcode?p=41260877752293016191651170001637541131086428"
           "|2|1|1|1E778A47C5BAEDD69BFCD4A14F8CD2A19C5CD919")
@@ -127,7 +127,7 @@ def test_chapisco_em_varias_intensidades(escala, sigma):
 # ── os dois decodificadores ──────────────────────────────────────────────────
 def _so(nomes: set[str]):
     """A escada com só alguns decodificadores ligados, para isolar cada um."""
-    import cupomzinho.qr as modulo
+    import mise_en_prato.qr as modulo
 
     return [d for d in modulo.DECODIFICADORES if d[0] in nomes]
 
@@ -141,7 +141,7 @@ def test_o_zxing_le_sozinho(monkeypatch):
     tem a chave de acesso legível no papel. O que dá para travar é isto: o
     caminho do zxing funciona de ponta a ponta.
     """
-    import cupomzinho.qr as modulo
+    import mise_en_prato.qr as modulo
 
     monkeypatch.setattr(modulo, "DECODIFICADORES", _so({"zxing"}))
     assert ler_qr(_bytes(_qr())) == [URL_QR]
@@ -149,7 +149,7 @@ def test_o_zxing_le_sozinho(monkeypatch):
 
 def test_sem_o_zxing_a_escada_continua_de_pé(monkeypatch):
     """A wheel pode faltar (o import é guardado) e o app não pode cair por isso."""
-    import cupomzinho.qr as modulo
+    import mise_en_prato.qr as modulo
 
     monkeypatch.setattr(modulo, "DECODIFICADORES", _so({"zbar"}))
     assert ler_qr(_bytes(_qr())) == [URL_QR]
@@ -163,7 +163,7 @@ def test_qr_com_bom_utf8():
 
 def test_decodificadores_limpam_bom():
     """Garante que tanto zbar quanto zxing limpam BOM diretamente."""
-    from cupomzinho.qr import _por_zbar, _por_zxing, zxingcpp
+    from mise_en_prato.qr import _por_zbar, _por_zxing, zxingcpp
 
     conteudo_com_bom = "\ufeff" + URL_QR
     imagem = _qr(conteudo=conteudo_com_bom)

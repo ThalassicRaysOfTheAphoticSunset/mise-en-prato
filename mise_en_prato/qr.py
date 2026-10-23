@@ -58,7 +58,7 @@ try:
 except ImportError:  # a wheel some, o app continua de pé com o zbar sozinho
     zxingcpp = None
 
-log = logging.getLogger("cupomzinho.qr")
+log = logging.getLogger("mise_en_prato.qr")
 
 # A varredura de escalas, em pixels do lado maior. Começa perto do original
 # (foto já boa passa na primeira) e desce até o tamanho em que um QR de 45
@@ -170,7 +170,7 @@ def ler_qr(dados: bytes) -> list[str]:
 
 
 def _main(argv: list[str]) -> int:
-    """Triagem das fotos que falharam: `python -m cupomzinho.qr foto.jpg pasta/`.
+    """Triagem das fotos que falharam: `python -m mise_en_prato.qr foto.jpg pasta/`.
 
     Existe para responder "esse QR ainda é legível?" sem subir nada — é com ele
     que a tabela de medições do topo deste arquivo foi levantada.
@@ -179,7 +179,7 @@ def _main(argv: list[str]) -> int:
 
     if not argv:
         print(__doc__.splitlines()[0])
-        print("uso: python -m cupomzinho.qr <foto.jpg|pasta> [...]")
+        print("uso: python -m mise_en_prato.qr <foto.jpg|pasta> [...]")
         return 2
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")

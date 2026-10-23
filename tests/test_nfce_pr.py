@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from cupomzinho.nfce_pr import (
+from mise_en_prato.nfce_pr import (
     ErroSefaz,
     buscar,
     chave_da_url,
@@ -184,7 +184,7 @@ def test_consulta_completa_fecha_e_esta_completa(cupom_da_consulta_completa):
 
 def test_consulta_completa_e_reconhecida_como_danfe():
     """A tela da chave digitada tem as marcas do DANFE e dispensa parser novo."""
-    from cupomzinho.consulta_chave import interpretar_resposta
+    from mise_en_prato.consulta_chave import interpretar_resposta
 
     cupom = interpretar_resposta(FIXTURE_CHAVE.read_text(encoding="utf-8"))
     assert len(cupom.itens) == 9

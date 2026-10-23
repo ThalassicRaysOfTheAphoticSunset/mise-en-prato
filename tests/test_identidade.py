@@ -1,14 +1,14 @@
 """O portão de identidade: só morador da tailnet entra."""
 import pytest
 
-from cupomzinho.identidade import NaoIdentificado, quem_e
+from mise_en_prato.identidade import NaoIdentificado, quem_e
 
 
 @pytest.fixture(autouse=True)
 def _tailnet_ligada(monkeypatch):
     monkeypatch.setenv("EXIGIR_TAILNET", "true")
     monkeypatch.setenv("MORADORES", "fulano@provedor.com=Fulano")
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
     config.cache_clear()
     yield
     config.cache_clear()
@@ -40,7 +40,7 @@ async def test_dentro_da_faixa_chega_a_perguntar_ao_tailscaled(tmp_path, monkeyp
     o que prova que a faixa foi aceita.
     """
     monkeypatch.setenv("TAILSCALED_SOCK", str(tmp_path / "inexistente.sock"))
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
     config.cache_clear()
     with pytest.raises(NaoIdentificado, match="whois"):
         await quem_e("100.114.252.81", 40000)

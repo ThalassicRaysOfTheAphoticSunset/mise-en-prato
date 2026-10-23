@@ -6,14 +6,14 @@ FROM python:3.13-slim AS base
 # libzbar0 é exigência do pyzbar, que decodifica o QR do cupom a partir da foto.
 # tesseract-ocr e tesseract-ocr-por são usados no OCR local de cupons sem NFC-e/QR.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libzbar0 tesseract-ocr tesseract-ocr-por \
- && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends libzbar0 tesseract-ocr tesseract-ocr-por \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # As dependências antes do código: mexer no código não invalida esta camada.
 COPY pyproject.toml ./
-COPY cupomzinho/__init__.py ./cupomzinho/
+COPY mise_en_prato/__init__.py ./mise_en_prato/
 RUN pip install --no-cache-dir .
 
 # ── dev: o mesmo ambiente, mais o ferramental de teste ───────────────────────
@@ -27,7 +27,7 @@ CMD ["pytest", "-q"]
 
 # ── produção ─────────────────────────────────────────────────────────────────
 FROM base AS producao
-COPY cupomzinho/ ./cupomzinho/
+COPY mise_en_prato/ ./mise_en_prato/
 # uid 1000 = miguel, o mesmo dono de /mnt/data
 USER 1000:1000
-CMD ["python", "-m", "cupomzinho"]
+CMD ["python", "-m", "mise_en_prato"]

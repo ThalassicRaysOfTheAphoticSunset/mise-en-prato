@@ -15,7 +15,7 @@ import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
-log = logging.getLogger("cupomzinho.tarefas")
+log = logging.getLogger("mise_en_prato.tarefas")
 
 INTERVALO_BACKUP = 6 * 60 * 60      # confere de 6 em 6 horas; grava uma vez por dia
 GUARDAR = 7                          # mesma conta do GUARDAR_BACKUPS do vigia

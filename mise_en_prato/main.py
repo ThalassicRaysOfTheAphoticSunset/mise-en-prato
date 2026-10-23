@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""O servidor do cupomzinho: a API e a PWA, no mesmo processo.
+"""O servidor do mise_en_prato: a API e a PWA, no mesmo processo.
 
-    uvicorn cupomzinho.main:app --host 0.0.0.0 --port 8090
+    uvicorn mise_en_prato.main:app --host 0.0.0.0 --port 8090
 
 Escuta só no IP da tailnet (quem publica a porta é o compose), então todo mundo
 que chega já passou pelo Tailscale — falta apenas perguntar ao tailscaled quem
@@ -64,7 +64,7 @@ from .ocr import interpretar_cupom_ocr
 from .qr import ler_qr
 
 WEB = Path(__file__).parent / "web"
-log = logging.getLogger("cupomzinho.main")
+log = logging.getLogger("mise_en_prato.main")
 
 
 class Codificador(json.JSONEncoder):
@@ -111,7 +111,7 @@ def configurar_log() -> None:
     então sem isto todo `log.info` da app some — e some justamente na hora de
     diagnosticar, que foi o que aconteceu com a primeira foto que falhou.
     """
-    log = logging.getLogger("cupomzinho")
+    log = logging.getLogger("mise_en_prato")
     if log.handlers:
         return
     saida = logging.StreamHandler(sys.stdout)
@@ -139,7 +139,7 @@ async def ciclo_de_vida(app: FastAPI):
     app.state.con.close()
 
 
-app = FastAPI(title="cupomzinho", default_response_class=RespostaJSON, lifespan=ciclo_de_vida)
+app = FastAPI(title="mise_en_prato", default_response_class=RespostaJSON, lifespan=ciclo_de_vida)
 
 
 @app.exception_handler(menor_preco.TetoAtingido)
@@ -433,7 +433,7 @@ class EnvioManual(BaseModel):
 def desafio_de_captcha(quem: Morador):
     """Um captcha novo, para o morador ler e digitar.
 
-    Quem resolve é gente. O cupomzinho só carrega a imagem até a tela.
+    Quem resolve é gente. O mise_en_prato só carrega a imagem até a tela.
     """
     _limpar_desafios()
     try:

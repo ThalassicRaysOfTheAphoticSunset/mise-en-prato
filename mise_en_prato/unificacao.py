@@ -19,7 +19,7 @@ import logging
 import re
 import sqlite3
 
-log = logging.getLogger("cupomzinho.unificacao")
+log = logging.getLogger("mise_en_prato.unificacao")
 
 # Sufixos de tamanho: 170G, 473ML, 1LT, 2L. Servem de âncora — dois nomes só
 # são candidatos se o tamanho bater, porque leite de 1 L e de 2 L são coisas

@@ -9,16 +9,16 @@ from pathlib import Path
 
 import pytest
 
-from cupomzinho.banco import conectar
-from cupomzinho.cupons import gravar
-from cupomzinho.menor_preco import (
+from mise_en_prato.banco import conectar
+from mise_en_prato.cupons import gravar
+from mise_en_prato.menor_preco import (
     CANARIO,
     MenorPreco,
     RespostaSuspeita,
     TetoAtingido,
     guardar,
 )
-from cupomzinho.nfce_pr import interpretar
+from mise_en_prato.nfce_pr import interpretar
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SADIO = json.loads((FIXTURES / "menor_preco_sadio.json").read_text(encoding="utf-8"))
@@ -29,7 +29,7 @@ DEGRADADO = json.loads((FIXTURES / "menor_preco_envenenado_gtin.json").read_text
 def con(tmp_path, monkeypatch):
     monkeypatch.setenv("DADOS", str(tmp_path))
     monkeypatch.setenv("TETO_CONSULTAS_HORA", "3")
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
     config.cache_clear()
     con = conectar(tmp_path / "teste.db")
     gravar(con, interpretar((FIXTURES / "cupom_lar_2026-08-14.html").read_text(encoding="utf-8")),

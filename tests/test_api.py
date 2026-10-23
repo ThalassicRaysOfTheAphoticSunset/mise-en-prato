@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from cupomzinho import cupons
-from cupomzinho.cupons import gravar
-from cupomzinho.nfce_pr import interpretar
+from mise_en_prato import cupons
+from mise_en_prato.cupons import gravar
+from mise_en_prato.nfce_pr import interpretar
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cupom_lar_2026-08-14.html"
 
@@ -19,15 +19,15 @@ FIXTURE = Path(__file__).parent / "fixtures" / "cupom_lar_2026-08-14.html"
 def _app(tmp_path, monkeypatch, *, exigir_tailnet: bool):
     monkeypatch.setenv("DADOS", str(tmp_path))
     monkeypatch.setenv("EXIGIR_TAILNET", "true" if exigir_tailnet else "false")
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
     config.cache_clear()
-    from cupomzinho.main import app
+    from mise_en_prato.main import app
     return app
 
 
 @pytest.fixture
 def cliente(tmp_path, monkeypatch):
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
     with TestClient(_app(tmp_path, monkeypatch, exigir_tailnet=False)) as c:
         cupom = interpretar(FIXTURE.read_text(encoding="utf-8"))
         gravar(c.app.state.con, cupom, morador="Miguel")
@@ -121,7 +121,7 @@ def test_fora_da_tailnet_leva_403(tmp_path, monkeypatch):
     O TestClient chega como "testclient", que não é 100.x — exatamente o caso
     de alguém batendo na porta por fora da tailnet.
     """
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
     with TestClient(_app(tmp_path, monkeypatch, exigir_tailnet=True)) as c:
         assert c.get("/api/saude").status_code == 200     # a saúde é pública
         assert c.get("/api/gastos").status_code == 403
@@ -131,14 +131,14 @@ def test_fora_da_tailnet_leva_403(tmp_path, monkeypatch):
 
 
 def test_a_pwa_e_servida(cliente):
-    assert "cupomzinho" in cliente.get("/").text
+    assert "mise-en-prato" in cliente.get("/").text
     assert cliente.get("/app.js").status_code == 200
     assert cliente.get("/manifest.webmanifest").status_code == 200
 
 
 def test_teto_de_consultas_vira_429_e_nao_500(cliente, monkeypatch):
     """Regressão: o teto estourando no canário derrubava a rota com 500."""
-    from cupomzinho import menor_preco
+    from mise_en_prato import menor_preco
 
     def estoura(self, **_kwargs):
         raise menor_preco.TetoAtingido("20 consultas na última hora. Libera às 15:20.")
@@ -159,13 +159,13 @@ CHAVE_NOVA = "41260876430438011297650100001622251010241380"
 
 
 def _com_dv(chave: str) -> str:
-    from cupomzinho.nfce_pr import digito_verificador
+    from mise_en_prato.nfce_pr import digito_verificador
 
     return chave[:43] + digito_verificador(chave)
 
 
 def _desafio_falso():
-    from cupomzinho.consulta_chave import Desafio
+    from mise_en_prato.consulta_chave import Desafio
 
     return Desafio(id="desafio-de-teste", url="https://exemplo.invalido/consulta",
                    campos={}, cookies={}, imagem=b"imagem-de-mentira")
@@ -174,7 +174,7 @@ def _desafio_falso():
 @pytest.fixture
 def portal(monkeypatch):
     """O portal do estado, dublado. Nenhum teste daqui toca a rede."""
-    from cupomzinho import main
+    from mise_en_prato import main
 
     chamadas = []
     monkeypatch.setattr(main, "abrir_desafio", _desafio_falso)
@@ -182,7 +182,7 @@ def portal(monkeypatch):
     def consultar(desafio, chave, captcha):
         chamadas.append((chave, captcha))
         if captcha != "certo":
-            from cupomzinho.consulta_chave import CaptchaRecusado
+            from mise_en_prato.consulta_chave import CaptchaRecusado
             raise CaptchaRecusado("nao")
         return FIXTURE.read_text(encoding="utf-8")
 
@@ -402,8 +402,8 @@ def test_catalogo_status_sem_inicializar(cliente):
 
 
 def test_catalogo_status_e_enriquecimento_local(cliente, tmp_path):
-    from cupomzinho.catalogo import conectar_catalogo, inserir_produtos
-    from cupomzinho.config import config
+    from mise_en_prato.catalogo import conectar_catalogo, inserir_produtos
+    from mise_en_prato.config import config
 
     caminho_cat = config().banco_catalogo
     cat = conectar_catalogo(caminho_cat, criar=True)
@@ -516,8 +516,8 @@ def test_gerenciar_variantes_api(cliente):
 
 def test_registrar_atualiza_cupom_incompleto(tmp_path, monkeypatch):
     """Se o cupom já existe no banco mas incompleto, registrar via URL busca e atualiza."""
-    from cupomzinho.config import config
-    from cupomzinho.nfce_pr import Cupom, Estabelecimento
+    from mise_en_prato.config import config
+    from mise_en_prato.nfce_pr import Cupom, Estabelecimento
 
     with TestClient(_app(tmp_path, monkeypatch, exigir_tailnet=False)) as c:
         con = c.app.state.con
@@ -534,7 +534,7 @@ def test_registrar_atualiza_cupom_incompleto(tmp_path, monkeypatch):
         assert guardado_antes["completo"] is False
 
         html_valido = FIXTURE.read_text(encoding="utf-8")
-        monkeypatch.setattr("cupomzinho.main.buscar", lambda url: html_valido)
+        monkeypatch.setattr("mise_en_prato.main.buscar", lambda url: html_valido)
 
         url = f"https://www.fazenda.pr.gov.br/nfce/qrcode?p={chave}|2|1|1|HASH"
         r = c.post("/api/cupom", json={"url": url})
@@ -571,13 +571,13 @@ def test_enviar_cupom_chave_com_bom(cliente):
 
 def test_registrar_higieniza_url_qr_no_banco(tmp_path, monkeypatch):
     """Garante que URL com BOM tem o BOM removido ao ser gravada em url_qr no banco."""
-    from cupomzinho.config import config
+    from mise_en_prato.config import config
 
     with TestClient(_app(tmp_path, monkeypatch, exigir_tailnet=False)) as c:
         con = c.app.state.con
         chave = interpretar(FIXTURE.read_text(encoding="utf-8")).chave
         html_valido = FIXTURE.read_text(encoding="utf-8")
-        monkeypatch.setattr("cupomzinho.main.buscar", lambda url: html_valido)
+        monkeypatch.setattr("mise_en_prato.main.buscar", lambda url: html_valido)
 
         url_pura = f"https://www.fazenda.pr.gov.br/nfce/qrcode?p={chave}|2|1|1|HASH"
         url_com_bom = "\ufeff" + url_pura

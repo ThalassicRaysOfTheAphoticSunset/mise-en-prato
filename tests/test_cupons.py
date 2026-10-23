@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from cupomzinho.banco import conectar
-from cupomzinho.cupons import existe, fila_de_revisao, gravar, ler, recentes, revisar
-from cupomzinho.nfce_pr import interpretar
+from mise_en_prato.banco import conectar
+from mise_en_prato.cupons import existe, fila_de_revisao, gravar, ler, recentes, revisar
+from mise_en_prato.nfce_pr import interpretar
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cupom_lar_2026-08-14.html"
 
@@ -150,7 +150,7 @@ def test_backup_e_poda(con, cupom, tmp_path):
     """VACUUM INTO gera um banco íntegro, e só se guarda os últimos 7."""
     import sqlite3
 
-    from cupomzinho.tarefas import fazer_backup
+    from mise_en_prato.tarefas import fazer_backup
 
     gravar(con, cupom, morador="Miguel")
     pasta = tmp_path / "backups"
@@ -177,7 +177,7 @@ def test_relatorio_conta_quantidade_e_nao_linha_de_cupom(con, cupom):
     seis unidades numa linha só diria "1", que foi como R$ 50,34 de bebida
     apareceram como comprados "1x".
     """
-    from cupomzinho.relatorios import produtos, resumo_do_mes
+    from mise_en_prato.relatorios import produtos, resumo_do_mes
 
     gravar(con, cupom, morador="Miguel")
     atum = next(p for p in produtos(con) if p["descricao"].startswith("ATUM"))
@@ -193,7 +193,7 @@ def test_relatorio_conta_quantidade_e_nao_linha_de_cupom(con, cupom):
 
 def test_quantidade_some_quando_as_unidades_divergem(con, cupom):
     """Somar 2 CX com 0,5 KG daria um número sem significado — melhor não somar."""
-    from cupomzinho.relatorios import produtos
+    from mise_en_prato.relatorios import produtos
 
     gravar(con, cupom, morador="Miguel")
     # o atum tem DUAS linhas: dá para deixar uma em PT e outra em KG
@@ -248,8 +248,8 @@ def test_sped_completo_grava_e_enriquece_gtin_no_banco(con):
 
 def test_garantir_estabelecimento_ignora_cnpj_vazio(con):
     """Garante que estabelecimentos com CNPJ vazio ou só espaços não são gravados."""
-    from cupomzinho.cupons import _garantir_estabelecimento
-    from cupomzinho.nfce_pr import Estabelecimento
+    from mise_en_prato.cupons import _garantir_estabelecimento
+    from mise_en_prato.nfce_pr import Estabelecimento
 
     e_vazio = Estabelecimento(cnpj="", razao="Loja Sem CNPJ")
     _garantir_estabelecimento(con, e_vazio)
@@ -265,8 +265,8 @@ def test_gravar_cupom_sem_cnpj_nao_grava_preco(con):
     import sqlite3
     from decimal import Decimal
 
-    from cupomzinho.cupons import gravar
-    from cupomzinho.nfce_pr import Cupom, Estabelecimento, Item
+    from mise_en_prato.cupons import gravar
+    from mise_en_prato.nfce_pr import Cupom, Estabelecimento, Item
 
     cupom = Cupom(
         chave="41260877752293016191651170001637541131086428",

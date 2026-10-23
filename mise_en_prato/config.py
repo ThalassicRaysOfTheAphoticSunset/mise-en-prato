@@ -50,7 +50,7 @@ class Config(BaseSettings):
 
     @property
     def banco(self) -> Path:
-        return self.dados / "cupomzinho.db"
+        return self.dados / "mise_en_prato.db"
 
     @property
     def banco_catalogo(self) -> Path:

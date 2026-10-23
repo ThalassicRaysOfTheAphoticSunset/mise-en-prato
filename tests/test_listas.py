@@ -14,10 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from cupomzinho.banco import conectar
-from cupomzinho.cupons import gravar
-from cupomzinho.listas import comparar, criar, itens, por_produto, sugerir, tirar
-from cupomzinho.nfce_pr import interpretar
+from mise_en_prato.banco import conectar
+from mise_en_prato.cupons import gravar
+from mise_en_prato.listas import comparar, criar, itens, por_produto, sugerir, tirar
+from mise_en_prato.nfce_pr import interpretar
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cupom_lar_2026-08-14.html"
 

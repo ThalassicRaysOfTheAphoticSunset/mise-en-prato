@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ponto de entrada do contêiner: `python -m cupomzinho`.
+"""Ponto de entrada do contêiner: `python -m mise_en_prato`.
 
 Existe para o servidor prender ele mesmo no endereço que o .env manda. A
 alternativa — deixar o Docker publicar a porta — não serve aqui: em rede
@@ -14,7 +14,7 @@ from .config import config
 
 def main() -> None:
     cfg = config()
-    uvicorn.run("cupomzinho.main:app", host=cfg.escutar, port=cfg.porta,
+    uvicorn.run("mise_en_prato.main:app", host=cfg.escutar, port=cfg.porta,
                 proxy_headers=False, forwarded_allow_ips=[])
 
 

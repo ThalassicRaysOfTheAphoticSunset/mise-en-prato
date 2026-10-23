@@ -1,10 +1,10 @@
 """Testes do CLI de reprocessamento de cupons salvos em disco."""
 from pathlib import Path
 
-from cupomzinho.banco import conectar
-from cupomzinho.cupons import gravar, ler
-from cupomzinho.nfce_pr import interpretar
-from cupomzinho.reprocessar import reprocessar
+from mise_en_prato.banco import conectar
+from mise_en_prato.cupons import gravar, ler
+from mise_en_prato.nfce_pr import interpretar
+from mise_en_prato.reprocessar import reprocessar
 
 FIXTURE_SPED = Path(__file__).parent / "fixtures" / "cupom_sped_completo.html"
 

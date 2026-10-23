@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from cupomzinho.banco import conectar
-from cupomzinho.cupons import gravar
-from cupomzinho.nfce_pr import interpretar
-from cupomzinho.unificacao import candidatos, parecidos, recusar, unificar
+from mise_en_prato.banco import conectar
+from mise_en_prato.cupons import gravar
+from mise_en_prato.nfce_pr import interpretar
+from mise_en_prato.unificacao import candidatos, parecidos, recusar, unificar
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cupom_lar_2026-08-14.html"
 
@@ -113,7 +113,7 @@ def test_unificar_move_historico_e_apaga_o_absorvido(con):
 
 def test_unificar_nao_perde_dinheiro(con):
     """O gasto total do mês não pode mudar por causa de uma unificação."""
-    from cupomzinho.relatorios import resumo_do_mes
+    from mise_en_prato.relatorios import resumo_do_mes
     antes = resumo_do_mes(con, "2026-08")["total"]
 
     ids = [r[0] for r in con.execute(

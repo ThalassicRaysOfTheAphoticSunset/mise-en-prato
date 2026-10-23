@@ -6,7 +6,7 @@ do SPED ou novos campos fiscais) e queremos atualizar o banco local sem fazer
 nenhuma chamada externa à SEFAZ.
 
 Uso:
-    python -m cupomzinho.reprocessar [--so-incompletos] [--dry-run]
+    python -m mise_en_prato.reprocessar [--so-incompletos] [--dry-run]
 """
 import argparse
 import logging
@@ -19,7 +19,7 @@ from .cupons import gravar, ler
 from .nfce_pr import LayoutDesconhecido, interpretar
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-log = logging.getLogger("cupomzinho.reprocessar")
+log = logging.getLogger("mise_en_prato.reprocessar")
 
 
 def reprocessar(

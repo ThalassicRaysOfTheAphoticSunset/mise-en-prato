@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from cupomzinho.sanidade import avaliar, canario_passou, digito_gtin_confere
+from mise_en_prato.sanidade import avaliar, canario_passou, digito_gtin_confere
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SADIO = json.loads((FIXTURES / "menor_preco_sadio.json").read_text(encoding="utf-8"))

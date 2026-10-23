@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Cliente da API pública do Menor Preço — sob demanda, e identificado.
 
-    python3 -m cupomzinho.menor_preco --termo "leite frimesa"
-    python3 -m cupomzinho.menor_preco --gtin 7891167011779
+    python3 -m mise_en_prato.menor_preco --termo "leite frimesa"
+    python3 -m mise_en_prato.menor_preco --gtin 7891167011779
 
 As cinco regras, e nenhuma delas é estilo:
 
@@ -10,7 +10,7 @@ As cinco regras, e nenhuma delas é estilo:
    Termo de Uso da CELEPAR proíbe sistema automatizado que faça, num dado
    período, mais solicitações do que seria "humanamente possível por meio de um
    navegador convencional", e proíbe uso para "aplicações de Pricing".
-2. **User-Agent honesto.** `cupomzinho/<versão> (uso pessoal...)`, nunca
+2. **User-Agent honesto.** `mise_en_prato/<versão> (uso pessoal...)`, nunca
    imitação de navegador. Um cliente que se identifica pode ser reconhecido e
    barrado pela CELEPAR quando ela quiser; copiar cabeçalho de Chrome tira dela
    essa escolha. A diferença não é de volume, é de honestidade.
@@ -34,11 +34,11 @@ from .banco import centavos
 from .config import config
 from .sanidade import Veredito, avaliar, canario_passou
 
-log = logging.getLogger("cupomzinho.menor_preco")
+log = logging.getLogger("mise_en_prato.menor_preco")
 
 VERSAO = "0.1"
 API = "https://menorpreco.notaparana.pr.gov.br/api/v1/produtos"
-UA = f"cupomzinho/{VERSAO} (uso pessoal, consulta sob demanda; casa-srv)"
+UA = f"mise_en_prato/{VERSAO} (uso pessoal, consulta sob demanda; casa-srv)"
 
 # Termo que não existe em produto nenhum. Resposta sadia devolve zero; resposta
 # degradada devolve dezenas de "produtos" com esse nome exato.

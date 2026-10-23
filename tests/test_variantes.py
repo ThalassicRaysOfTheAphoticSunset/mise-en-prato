@@ -1,16 +1,16 @@
 """Testes de variantes e sabores de produtos multissabor."""
 import pytest
 
-from cupomzinho.banco import conectar
-from cupomzinho.catalogo import (
+from mise_en_prato.banco import conectar
+from mise_en_prato.catalogo import (
     definir_variante_padrao,
     extrair_sabor,
     listar_variantes,
     remover_variante,
     salvar_variantes_do_produto,
 )
-from cupomzinho.enriquecimento import pendentes
-from cupomzinho.unificacao import candidatos, unificar
+from mise_en_prato.enriquecimento import pendentes
+from mise_en_prato.unificacao import candidatos, unificar
 
 
 @pytest.fixture

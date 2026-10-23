@@ -8,17 +8,17 @@ from pathlib import Path
 
 import pytest
 
-from cupomzinho.banco import conectar
-from cupomzinho.catalogo import conectar_catalogo, inserir_produtos
-from cupomzinho.cupons import gravar
-from cupomzinho.enriquecimento import (
+from mise_en_prato.banco import conectar
+from mise_en_prato.catalogo import conectar_catalogo, inserir_produtos
+from mise_en_prato.cupons import gravar
+from mise_en_prato.enriquecimento import (
     enriquecer,
     enriquecer_local,
     enriquecer_pendentes_local,
     escolher_gtin,
     pendentes,
 )
-from cupomzinho.nfce_pr import interpretar
+from mise_en_prato.nfce_pr import interpretar
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cupom_lar_2026-08-14.html"
 ATUM = "ATUM GOM COSTA RALADO NAT 170G"
@@ -142,7 +142,7 @@ def test_pendentes_prioriza_o_que_a_casa_mais_compra(con):
 
 def test_enriquecer_dois_produtos_no_mesmo_gtin_vira_candidato_a_unificacao(con):
     """O ciclo se fecha: código igual é prova de que são o mesmo item."""
-    from cupomzinho.unificacao import candidatos
+    from mise_en_prato.unificacao import candidatos
     a, b = (r[0] for r in con.execute(
         "SELECT id FROM produto WHERE descricao_canonica LIKE 'IOG%' ORDER BY id LIMIT 2"))
     con.execute("UPDATE produto SET gtin = ? WHERE id IN (?,?)", (GTIN, a, b))

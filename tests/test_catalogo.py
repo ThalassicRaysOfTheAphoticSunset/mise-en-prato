@@ -1,14 +1,14 @@
 """Testes do banco satélite de catálogo offline e ingestão de dumps.
 
 O catálogo satélite vive em dados/catalogo.db de forma isolada do banco
-transacional principal dados/cupomzinho.db.
+transacional principal dados/mise_en_prato.db.
 """
 import gzip
 import json
 
 import pytest
 
-from cupomzinho.catalogo import (
+from mise_en_prato.catalogo import (
     buscar_por_gtin,
     buscar_por_termo,
     conectar_catalogo,
@@ -172,7 +172,7 @@ def test_ingestar_openfoodfacts_stream(tmp_path, db_catalogo):
 
 
 def test_consultar_openfoodfacts_api_invalido():
-    from cupomzinho.catalogo import consultar_openfoodfacts_api
+    from mise_en_prato.catalogo import consultar_openfoodfacts_api
 
     assert consultar_openfoodfacts_api("") is None
     assert consultar_openfoodfacts_api("123") is None
@@ -182,7 +182,7 @@ def test_consultar_openfoodfacts_api_invalido():
 def test_sincronizar_gtins_existentes(db_catalogo):
     import sqlite3
 
-    from cupomzinho.catalogo import inserir_produtos, sincronizar_gtins_existentes
+    from mise_en_prato.catalogo import inserir_produtos, sincronizar_gtins_existentes
 
     # Insere produto no catálogo de teste
     inserir_produtos(

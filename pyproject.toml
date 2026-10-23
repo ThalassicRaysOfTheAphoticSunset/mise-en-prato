@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cupomzinho"
+name = "mise-en-prato"
 version = "0.1.0"
 description = "Cupom fiscal, gasto de mercado e caça a preço — NFC-e do Paraná"
 requires-python = ">=3.13"
@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["cupomzinho"]
+packages = ["mise_en_prato"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "pytest-asyncio>=0.25", "ruff>=0.9",

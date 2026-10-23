@@ -31,7 +31,7 @@ from bs4 import BeautifulSoup
 from .menor_preco import UA
 from .nfce_pr import Cupom, interpretar
 
-log = logging.getLogger("cupomzinho.consulta_chave")
+log = logging.getLogger("mise_en_prato.consulta_chave")
 
 # O formulário, no endereço direto. A rota amigável
 # (www.fazenda.pr.gov.br/nfce/consulta) responde 301 para "www.sped..." — e ESSE

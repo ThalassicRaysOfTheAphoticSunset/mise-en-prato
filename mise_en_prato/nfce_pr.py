@@ -5,8 +5,8 @@ Recebe o que o QR Code do cupom carrega — uma URL da consulta pública da
 SEFAZ-PR — e devolve a compra estruturada: loja, itens, totais e pagamento.
 Nada de OCR: a página da SEFAZ é o extrato exato, item a item.
 
-    python3 -m cupomzinho.nfce_pr 'https://www.fazenda.pr.gov.br/nfce/qrcode?p=...'
-    python3 -m cupomzinho.nfce_pr tests/fixtures/cupom_lar_2026-08-14.html
+    python3 -m mise_en_prato.nfce_pr 'https://www.fazenda.pr.gov.br/nfce/qrcode?p=...'
+    python3 -m mise_en_prato.nfce_pr tests/fixtures/cupom_lar_2026-08-14.html
 
 `buscar()` fala com a rede; `interpretar()` é pura e recebe o HTML já em mãos.
 A separação existe para o teste rodar contra o cupom guardado, sem internet e

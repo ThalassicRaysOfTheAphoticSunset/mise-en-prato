@@ -36,7 +36,7 @@ from .catalogo import (
 from .nfce_pr import normalizar
 from .sanidade import digito_gtin_confere
 
-log = logging.getLogger("cupomzinho.enriquecimento")
+log = logging.getLogger("mise_en_prato.enriquecimento")
 
 
 def buscar_metadados_ean(gtin: str, timeout: int = 5) -> dict | None:

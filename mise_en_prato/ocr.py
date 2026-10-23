@@ -21,7 +21,7 @@ from pytesseract import Output
 from .banco import centavos
 from .nfce_pr import Cupom, Estabelecimento, Item, normalizar, validar_chave
 
-log = logging.getLogger("cupomzinho.ocr")
+log = logging.getLogger("mise_en_prato.ocr")
 
 
 def pre_processar_imagem(imagem: Image.Image) -> Image.Image:
