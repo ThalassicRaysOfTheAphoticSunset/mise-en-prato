@@ -56,7 +56,8 @@ jobs:
           USER: ${{ secrets.CASA_SRV_USER || 'miguel' }}
         run: |
           mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/id_deploy
+          echo "$SSH_KEY" | tr -d '\r' > ~/.ssh/id_deploy
+          echo "" >> ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
           ssh -v -i ~/.ssh/id_deploy -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
