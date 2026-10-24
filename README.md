@@ -1,339 +1,270 @@
-# cupomzinho
+# mise-en-prato
 
-Cupom fiscal, gasto de mercado e caça a preço — para o Paraná.
-
-A cada compra o cupom traz um QR Code. Ele aponta para a consulta pública de
-NFC-e da SEFAZ-PR, que devolve a compra **item a item**, com descrição,
-quantidade e valor unitário. É o extrato exato, sem OCR e sem digitar nada.
-
-O `cupomzinho` guarda isso num sqlite local e responde três perguntas:
-
-- **quanto a casa gastou** — por mês, por mercado, por morador;
-- **quanto você paga por cada coisa** — a série do seu próprio preço;
-- **onde está mais barato agora** — cruzando com a API pública do
-  [Menor Preço Nota Paraná](https://menorpreco.notaparana.pr.gov.br/).
-
-Roda no servidor de casa, acessível só pela tailnet. Nada sai da máquina além
-das duas consultas públicas ao estado.
-
-> Estado atual: cupom entra, gasto e histórico de preço funcionam. O
-> enriquecimento pelo Menor Preço (código de barras, categoria, comparação
-> entre mercados) está desenhado e ainda não ligado — ver **O que falta**.
+Da nota fiscal à bancada da cozinha — controle de gastos de mercado, caça a preço e gestão culinária com Modo Cozinha.
 
 ---
 
-## Como sobe
+O **mise-en-prato** é a evolução do `cupomzinho`: uma aplicação doméstica e de portfólio que une a extração e análise de cupons fiscais de mercado (via QR Code / NFC-e da SEFAZ-PR) com um ecossistema culinário prático — gestão de receitas com fotos de capa, **Modo Cozinha** dedicado para bancada, integração imediata com a **Lista de Compras** e inteligência de preços por produto e por mercado.
 
-```bash
-cp .env.exemplo .env      # e preencha MORADORES
-docker compose up -d --build
+A premissa continua a mesma: a cada compra no mercado, o cupom fiscal traz um QR Code que aponta para a consulta pública da SEFAZ-PR. O servidor extrai o extrato exato **item a item** (descrição, quantidade, valor unitário e total), sem OCR e sem digitação manual. A partir desse histórico de abastecimento real, o `mise-en-prato` conecta o que você comprou ao que você cozinha.
+
+---
+
+## O que o mise-en-prato faz
+
+```
+  [Cupom Fiscal / NFC-e]             [Despensa & Preços]              [Cozinha & Preparo]
+  • QR Code / Foto Celular            • Histórico por produto         • Catálogo de Receitas
+  • Chave de 44 dígitos               • Menor Preço (CELEPAR)         • Modo Cozinha (Wake Lock)
+  • Upload de HTML cru                • Cobertura entre mercados      • Multiplicador de porções
+           │                                   │                               │
+           ▼                                   ▼                               ▼
+    ┌──────────────┐                   ┌──────────────┐                ┌──────────────┐
+    │  Ingestão &  │ ─── catálogo ───> │   Lista de   │ <── faltantes ─┤   Módulo de  │
+    │  Unificação  │                   │   Compras    │                │   Receitas   │
+    └──────────────┘                   └──────────────┘                └──────────────┘
 ```
 
-Depois, no navegador: `http://100.122.128.48:8090`.
+### 1. Livro de Receitas & Entrada Híbrida
+- **Catálogo Culinário da Casa:** Organização de receitas por categorias (*Prato Principal*, *Massas*, *Sobremesas*, etc.), tempo de preparo e rendimento em porções.
+- **Entrada Híbrida Inteligente:** Permite colar receitas completas em texto corrido com parser regex inteligente (identifica ingredientes, frações, unidades de medida e nomes) ou ajustar campo a campo.
+- **Vínculo com o Catálogo:** Ingredientes podem ser associados diretamente a produtos do histórico de compras da casa.
+- **Fotos de Capa em WebP:** Processamento local via Pillow com compressão leve em WebP (max 1200px, sem metadados EXIF), mantendo a navegação instantânea e arquivos compactos (< 200 KB).
 
-O `.env` tem três coisas que importam:
+### 2. Modo Cozinha (Hands-Free na Bancada)
+Projetado especificamente para o uso com *"mãos na massa / dedos com azeite"* em tablets e celulares apoiados na bancada:
+- **Tela Cheia com Wake Lock Ativo:** Utiliza a Screen Wake Lock API (`navigator.wakeLock`) para manter o display do celular ou tablet **sempre aceso** enquanto você cozinha, sem precisar tocar na tela com as mãos sujas.
+- **Escala Dinâmica de Porções:** Alterne rapidamente entre frações e múltiplos (`½x`, `1x`, `2x`) com recálculo instantâneo de todos os ingredientes em frações culinárias amigáveis (`½`, `¼`, `1 ½`).
+- **Checklist de *Mise-en-place*:** Touch targets generosos (≥ 48px) para riscar ingredientes já separados, medidos e cortados antes de acender o fogo.
+- **Tipografia e Contraste Otimizados:** Passos numerados em destaque com fontes legíveis a metros de distância.
 
-| Variável | O que é |
-|---|---|
-| `MORADORES` | `login@dominio=Nome`, separado por vírgula. **É o e-mail inteiro** que o `tailscale whois` devolve, não o apelido |
-| `LOCAL` | centro da busca de preço, `"lat,lon"` |
-| `TETO_CONSULTAS_HORA` | teto de consultas ao Menor Preço — leia a seção sobre a API antes de subir |
+### 3. Lista de Compras Inteligente
+Responde à pergunta que importa: **"levando ESTA lista, qual mercado sai mais barato?"**
+- **Envio Direto da Receita:** Selecione os ingredientes faltantes no detalhe da receita e envie-os para a lista de compras com um clique.
+- **Comparação com Cobertura Real:** Cruza os itens com os preços da casa e a API do Menor Preço, informando a **cobertura** (quantos itens da lista aquela loja realmente vende) para evitar que uma loja vença o comparativo apenas por ter preço de meia dúzia de itens.
+- **Modo Mercado:** Checkboxes amplos alinhados à esquerda para marcação ágil com uma mão só no corredor do supermercado, movendo itens marcados para *"No carrinho"*.
 
-### Não há senha, e é de propósito
-
-O servidor escuta **só no IP da tailnet**. Quem chega já passou pelo Tailscale,
-então basta perguntar ao `tailscaled` quem é aquele IP — é o que a LocalAPI faz,
-pelo socket unix, sem CLI dentro do contêiner e sem privilégio nenhum.
-
-Por isso o contêiner usa **`network_mode: host`**, e quem prende a porta é o
-uvicorn (env `ESCUTAR`), não a publicação de porta do Docker. Em rede bridge o
-Docker mascara o IP de origem dos clientes externos, e o servidor recebe o
-gateway da bridge (`172.x`) no lugar do IP de quem pediu — aí ninguém é morador.
-O detalhe cruel é que, testado do próprio host, funciona: ali a origem já é o
-IP da tailnet. Só aparece de outro aparelho.
-
-Quem está na tailnet mas não está em `MORADORES` é visita de share do nó, e
-leva 403. Visita não registra compra da casa.
+### 4. Gestão Financeira e Caça a Preço
+- **Extrato Exato de Mercado:** Gastos mensais consolidados por estabelecimento e morador da casa.
+- **Série Histórica Própria:** Acompanhe a evolução do preço que a sua própria residência pagou ao longo dos meses.
+- **Menor Preço sob Demanda:** Consulta ética à base estadual da CELEPAR para descobrir promoções e cotações recentes na sua região geográfica.
 
 ---
 
-## Mandar cupom do celular
+## Repaginação Visual: Ferro Fundido & Sal Marinho
 
-O Safari do iPhone **não tem `BarcodeDetector`**, então quem decodifica o QR é o
-servidor, não o navegador. Isso deixa o caminho igual em qualquer aparelho.
+A interface foi inteiramente redesenhada para uma estética **Editorial Gastrônomo / Warm Modernist**, inspirada em cadernos de receitas clássicos e na culinária afetiva:
 
-1. **Fotografar** (principal) — abra a PWA, toque em *Fotografar o QR do cupom*,
-   enquadre o quadradinho. Um toque.
-2. **Colar o link** — o app Câmera do iPhone lê o QR e mostra a notificação;
-   copie o endereço e cole na PWA.
-3. **Atalho do iOS** (um toque, sem abrir a PWA):
-   - Atalhos → novo atalho → **Ler código QR**
-   - → **Obter conteúdo do URL**: endereço `http://100.122.128.48:8090/api/cupom`,
-     método `POST`, corpo `JSON` com o campo `url` = *Código QR* (a saída do
-     passo anterior)
-   - dê um nome, e **Adicionar à Tela de Início**.
-4. **Digitar a chave de acesso** — quando o QR está manchado e não lê de jeito
-   nenhum. São os 44 números impressos logo acima do quadradinho, em grupos de
-   quatro. Abre a gaveta *ou digitar a chave de acesso*, o portal do estado
-   manda um captcha, você lê as letras. Ver "Quando o QR não lê", abaixo.
-
-Mandar o mesmo cupom duas vezes não duplica nada: a chave de acesso é a chave
-primária, e reenvio é o caso comum, não a exceção.
+- **Paleta Bistrô:** Tons de ardósia mineral e ferro forjado escuro (`#191f24`), superfícies salinas claras (`#f4f5f5`), toques de ardósia azul-petróleo profunda (`--oliva-primario`), acentos quentes em terracota / cobre martelado (`--terracota`) e latão mostarda (`--mostarda`).
+- **Tema Escuro Nativo:** Suporte automático via `prefers-color-scheme`, mantendo o contraste e conforto visual à noite.
+- **Dock Flutuante (*Floating Dock*) Mobile-First:** Barra de navegação inferior com cantos curvos e acabamento translúcido (*glassmorphism* com `backdrop-filter`), garantindo alcance ergonômico em smartphones e tablets. Organizada em 4 seções principais:
+  1. 📖 **Receitas**
+  2. 🛒 **Lista**
+  3. 🥕 **Produtos**
+  4. 📊 **Gastos** (com a fila de revisão de cupons integrada)
+- **FAB Central (+) & Bottom Sheet:** No centro do dock, um botão de ação destacado em cobre martelado abre uma folha inferior (*bottom sheet*) para ações rápidas:
+  - 📷 *Fotografar QR do Cupom* (dispara a câmera nativa do smartphone diretamente)
+  - ✍️ *Cadastrar Nova Receita* (abre o formulário híbrido)
+  - 📝 *Item na Lista de Compras* (inclusão ágil no mercado)
+  - 🔗 *Opções Manuais* (digitar chave de 44 números, colar URL da SEFAZ ou subir arquivo HTML)
+- **Zero Build Step & CSP Estrita:** 100% Vanilla JS, HTML5 semântico e CSS nativo moderno. **Sem Node, Vite, React ou bundlers**. Tipografia elegante com pilhas de fontes nativas do sistema operacional e ícones vetoriais SVG inline ultraleves. Zero chamadas a CDNs externas, carregamento instantâneo e funcionamento pleno offline via Service Worker.
 
 ---
 
-## Menor Preço: consulta sob demanda, com o cliente identificado
+## Topologia de Ambientes (`APP_MODE`)
 
-O `cupomzinho` consulta a API pública do Menor Preço **só quando uma pessoa
-pede** — nunca em laço, nunca agendado. As regras abaixo não são estilo, são a
-razão de a coisa ser aceitável.
+O comportamento do sistema é orquestrado pela variável de ambiente `APP_MODE`:
 
-### O que o Termo de Uso proíbe
-
-O Termo (CELEPAR, em `menorpreco.notaparana.pr.gov.br/termo`) é específico:
-
-> "Você se compromete a não utilizar qualquer sistema automatizado, inclusive,
-> mas sem se limitar a 'robôs', 'spiders' ou 'agentes automatizados', que
-> acessem a Plataforma de maneira a efetuar diversas solicitações aos
-> servidores da CELEPAR em um dado período de tempo, que seja considerado
-> humanamente impossível de ser realizado no mesmo período por meio de um
-> navegador convencional ou de um aplicativo."
-
-> "É vedada também a utilização da Plataforma para aplicações de 'Pricing', ou
-> verificação de preços da concorrência e a utilização abusiva da Plataforma."
-
-E a Plataforma destina-se a "fins informativos e de uso próprio, excluindo
-qualquer utilização comercial ou publicitária".
-
-Uso doméstico, sob demanda, para decidir onde a casa faz a compra da semana
-cabe nisso. Um vigia de preços rodando de hora em hora não cabe — e foi
-justamente o vigia que a primeira versão do plano previa, por decisão minha e
-não por pedido de ninguém.
-
-### As cinco regras
-
-1. **Só disparado por gente.** Nenhuma tarefa de fundo, nenhum agendamento.
-2. **User-Agent honesto**, `cupomzinho/<versão> (uso pessoal...)`. Nunca imitar
-   navegador. A diferença não é de volume, é de honestidade: um cliente que se
-   identifica pode ser reconhecido e barrado pela CELEPAR quando ela quiser —
-   copiar os cabeçalhos do Chrome tira dela essa escolha.
-3. **Uma consulta por vez**, com espera entre elas, e teto por hora (50 por
-   padrão: uma a cada ~72 segundos, ritmo de gente).
-4. **Toda resposta validada** antes de virar linha no banco (ver abaixo).
-5. **Cache no banco.** O preço de ontem responde a pergunta de hoje; não se
-   pergunta duas vezes a mesma coisa.
-
-### Os parâmetros da API, medidos
-
-`GET /api/v1/produtos?local=&raio=&data=&offset=&ordem=&termo=|gtin=[&categoria=]`
-
-| Parâmetro | O que se sabe |
-|---|---|
-| `local` | aceita `lat,lon` **e** geohash (`6g98151gk`); o front usa geohash |
-| `gtin` | busca exata por código de barras — é o caminho bom quando se tem |
-| `termo` | busca por texto; buscar o nome exato do produto é legítimo e comum |
-| `data` | **não é janela estrita**: com `data=7` vieram observações de 14 dias antes. `data=-1` devolveu resultado IDÊNTICO a `data=7`. `data=30` pendura a conexão |
-| `categoria` | filtro adicional que o front oferece depois de `/api/v1/categorias`. Sem serventia aqui: buscando por gtin ou nome exato a precisão já é alta |
-| `raio` | km a partir de `local` |
-
-Como `data` não é janela estrita, **a app não filtra de novo por data ao
-comparar** — filtrar em 7 dias do nosso lado descartava preço que a própria
-fonte deu por vigente, e fazia loja com preço válido sumir da comparação como
-se não vendesse o item. A janela nossa é larga (30 dias) e a tela mostra a data
-da observação mais antiga de cada loja, para quem lê julgar.
-
-### O modo degradado existe, e é silencioso
-
-Isto foi medido, e é o motivo de a regra 4 não ser opcional.
-
-Enquanto as consultas saíam com o User-Agent padrão do Python
-(`Python-urllib/3.13`), a API respondia **HTTP 200 com uma base de teste**:
-`desc` ecoando o termo consultado, lojas com caracteres trocados
-(`CONDOR SUVER CENTZR LTDA`, `CAMPO VAGRA` por Campo Largo, uma delas prefixada
-`ZTEST`), municípios do Paraná rotulados como PE, `ncm` com 9 dígitos, preços
-implausíveis. As distâncias, essas, vinham coerentes com o raio pedido.
-
-Nunca houve bloqueio: o navegador de um desktop na mesma LAN, no mesmo IP
-público, recebia dado limpo o tempo todo. O discriminador era o User-Agent.
-
-A fixture `tests/fixtures/menor_preco_envenenado_gtin.json` guarda uma dessas
-respostas. Os sinais que a denunciam, do mais barato ao mais caro:
-
-| Sinal | Sadio | Degradado |
+| Modo | Ambiente Típico | Características & Regras de Isolamento |
 |---|---|---|
-| canário (termo inventado) | `total: 0` | dezenas de produtos com aquele nome |
-| `ncm` | 8 dígitos | 9 dígitos |
-| `estabelecimento.uf` | só `PR` | mistura `ES`, `PE` |
-| `desc` distintas num lote | várias | uma só, repetida |
-| `distkm` | coerente | **também coerente — não serve de sinal** |
-
-## O que o cupom traz (e o que não traz)
-
-O HTML da consulta pública é inválido em três pontos que derrubam um parser
-ingênuo, todos vistos no cupom real que serve de fixture:
-
-- `id="linhaTotal"` **se repete** em todos os totais. Ler por id devolveria o
-  primeiro valor para todos os campos — errado, e em silêncio. Os totais são
-  lidos pelo texto do `<label>`.
-- `id="Item + 1"` tem **espaço** no id, o que nenhum seletor de id aceita.
-- `<br></br>` espalhado pelo documento.
-
-É por isso que se usa lxml aqui, e não o `html.parser` da stdlib.
-
-### Foto de celular: o problema é resolução DEMAIS
-
-Contra-intuitivo, e custou dois envios falhos até virar medição. Um iPhone
-entrega 4032x3024; o QR da NFC-e tem ~45 módulos de lado e ocupa boa parte do
-quadro, o que dá uns **40 pixels por módulo**. Só que a impressão térmica é
-chapiscada — o módulo não é um quadrado sólido, é uma nuvem de pontos com
-falhas. Nessa escala o zbar mede o chapisco em vez do módulo e desiste, mesmo
-com a foto bem enquadrada e nítida.
-
-Medido contra a foto real que falhou:
-
-```
-reduzida para 1600, 1200, 900, 700 ......... falhou
-reduzida para 500, 400, 300 ................ achou
-desfoque 4 + reduzida para 1200, 800, 600 .. achou
-filtro de mediana, em qualquer tamanho grande  falhou
-```
-
-Daí a escada de `cupomzinho/qr.py`: uma varredura de escalas, desfocando na
-medida da redução. A foto que falhava passa hoje na segunda tentativa, em ~1 s.
-
-Duas hipóteses foram levantadas e **medidas como falsas** no caminho, e ficam
-registradas para ninguém as perseguir de novo: falta de zona de silêncio (o
-zbar lê QR sem margem nenhuma) e filtro de mediana para matar o chapisco (não
-recupera em resolução alta).
-
-### Quando o QR não lê: a segunda porta do portal
-
-A escada de escalas tem limite, e o limite tem data: **26/08/2026**, duas fotos
-de um cupom térmico manchado que resistiram a tudo. A medição está no topo de
-`cupomzinho/qr.py` — 840 combinações de escala, filtro e decodificador, nenhuma
-leu. Aquele QR está fisicamente perdido.
-
-A chave de acesso, porém, continua impressa no papel. E ela **não serve** para a
-rota do QR, por um motivo que não é falta de esperteza. Medido contra o portal
-em 27/08/2026:
-
-```
-GET /nfce/qrcode?p=<chave>|2|1|1|<hash certo> .... 200, o DANFE inteiro
-GET /nfce/qrcode?p=<chave> ...................... 200, "Erro interno no servidor"
-GET /nfce/qrcode?p=<chave>|2|1|1|<hash zerado> .. 200, "100 - QR Code Inválido"
-```
-
-O `p` termina num SHA-1 que o emitente calcula com o CSC dele — segredo que não
-é impresso e não se deriva da chave. Essa porta exige o QR, ponto final.
-
-Só que o estado mantém uma segunda consulta, a **Consulta Completa NFC-e**, e
-essa aceita a chave digitada, cobrando um captcha de imagem:
-
-```
-POST https://sped.fazenda.pr.gov.br/NFCe/webservices/sped/nfce/completa
-  txRota=nfce  txTipo=completa  txOrigem=formulario  txAmbiente=1
-  txChave=<44 dígitos>  captcha_sid  captcha_token  captcha_response
-  form_build_id  form_id  op=Consultar
-imagem: /image-captcha-generate/<sid>/<token>   (JPEG, apesar do nome)
-```
-
-É o que `cupomzinho/consulta_chave.py` faz: busca o formulário, traz a imagem
-até a tela do morador, e devolve ao portal a resposta que **ele** digitou. Sem
-OCR, sem laço, sem agendamento — um cupom por vez, quando alguém pede. Quem
-prova ser gente continua sendo gente; o que muda é só a tela onde as letras são
-digitadas. É a mesma disciplina que o cliente do Menor Preço segue.
-
-Dois detalhes que custaram medição:
-
-- **Não use a rota amigável** `www.fazenda.pr.gov.br/nfce/consulta`: ela responde
-  301 para `www.sped...`, e esse host serve certificado **auto-assinado e
-  vencido**, emitido para `www.drupalweb.celepar.pr.gov.br`. Desligar a
-  verificação de TLS para contornar seria trocar um defeito do portal por um
-  defeito nosso. O endereço direto acima tem certificado válido.
-- **A chave se confere sozinha**: o 44º dígito é módulo 11 sobre os outros 43
-  (`validar_chave`). Quem digita 44 números troca algum, e recusar de graça é
-  melhor que gastar um captcha para o portal responder "nota não encontrada".
-  Conferido contra os 8 cupons reais já guardados: 8 de 8.
-
-E a chave ainda diz mais do que parece — os dígitos são posicionais
-(`dados_da_chave`): UF, mês/ano da emissão, **CNPJ da loja**, série e número.
-Dá para montar meio cupom sem consultar ninguém, que é o que a rota
-`/api/cupom/manual` faz quando nem o portal ajuda: grava sem itens, com aviso, e
-manda para a fila de revisão. Meia informação vale mais que nenhuma.
-
-**O cupom não traz código de barras nem NCM.** Traz a descrição e um código
-interno da loja. Daí o casamento de produto em três degraus (`cupomzinho/cupons.py`):
-
-1. `apelido_loja` — se `(loja, texto)` já foi resolvido, acabou. É o que faz o
-   segundo cupom da mesma loja ser instantâneo;
-2. enriquecimento pelo Menor Preço — só aceita candidato com descrição
-   **idêntica** após normalizar, **mesma loja** e **mesmo preço**;
-3. fila "unificar produtos", na mão.
-
-### Privacidade
-
-O rodapé do cupom traz `Operador(a): <matrícula>-<nome completo do caixa>`. É
-dado pessoal de um funcionário da loja e não serve ao controle de gasto da casa:
-**não é lido nem guardado**. A fixture de teste entra no repositório com o nome
-removido e com chave de acesso e protocolo mascarados.
+| **`home`** | Servidor doméstico (`casa-srv`) | **Produção real da residência.** Todas as funções ativas: ingestão de cupons da SEFAZ-PR, consulta sob demanda ao Menor Preço, escrita persistente em `/mnt/data/mise-en-prato`, upload de fotos WebP e autenticação transparente via Tailscale LocalAPI. |
+| **`dev`** | Máquina local (`MiguelPC`) | **Desenvolvimento e testes via Docker.** `EXIGIR_TAILNET=false`, morador padrão injetado (`dev@local.test=Dev`), portas expostas em `0.0.0.0:8090` e montagem do código em tempo real (`.:/app`). |
+| **`demo`** | Servidor de portfólio público | **Demonstração pública segura.** Apresenta badge discreto *"Demo"* no cabeçalho.<br>• **Bloqueio de chamadas externas:** Chamadas de raspagem à SEFAZ e ao Menor Preço são terminantemente bloqueadas (retornando HTTP 403 com aviso amigável na interface).<br>• **Banco Anonimizado (`demo.db`):** Preserva o catálogo de receitas, fotos de pratos, cardápios e histórico de preços reais, expurgando chaves de NFC-e, URLs fiscais, nomes de operadores e dados sensíveis dos moradores. |
 
 ---
 
-## Desenvolvimento
+## Como Rodar
 
-O host do casa-srv não tem `pip` nem `python3-venv` (Debian, PEP 668), e não vai
-ter — **o contêiner é o ambiente de desenvolvimento**:
+### 1. Servidor Doméstico de Produção (`home`)
+
+No servidor residencial (ex: `casa-srv` rodando Tailscale):
 
 ```bash
-docker build --target dev -t cupomzinho:dev .
+# Clone e configuração
+cp .env.example .env
+# Edite o .env configurando MORADORES, LOCAL e caminhos
 
-# testes e linter, com o código montado de fora (não precisa reconstruir)
-docker run --rm -v "$PWD:/app" -w /app cupomzinho:dev pytest -q
-docker run --rm -v "$PWD:/app" -w /app cupomzinho:dev ruff check .
-
-# o parser na mão, contra a fixture ou contra um cupom novo
-docker run --rm -v "$PWD:/app" -w /app cupomzinho:dev \
-  python -m cupomzinho.nfce_pr tests/fixtures/cupom_lar_2026-08-14.html
+# Subida do contêiner de produção
+docker compose up -d --build app
 ```
 
-Reconstruir a imagem só é preciso quando muda dependência.
+Acesse através do IP da tailnet: `http://100.122.128.48:8090`.
 
-### Onde fica cada coisa
+### 2. Desenvolvimento Local no MiguelPC (`dev`)
 
-| Arquivo | Papel |
-|---|---|
-| `cupomzinho/nfce_pr.py` | busca e interpreta o cupom no portal da SEFAZ-PR; lê a chave de acesso |
-| `cupomzinho/qr.py` | acha o QR na foto: escada de escalas, dois decodificadores |
-| `cupomzinho/consulta_chave.py` | a segunda porta: consulta pela chave, com o captcha do portal |
-| `cupomzinho/cupons.py` | grava o cupom e casa item com produto |
-| `cupomzinho/relatorios.py` | as consultas de gasto e de histórico |
-| `cupomzinho/identidade.py` | quem é o morador, pelo `whois` do tailscaled |
-| `cupomzinho/banco.py` | conexão sqlite (WAL) e migrações numeradas |
-| `cupomzinho/main.py` | a API e a PWA, no mesmo processo |
-| `cupomzinho/web/` | a PWA, sem framework e sem build |
+O host local não possui Python/pip instalados diretamente; todo o ciclo de desenvolvimento e execução é feito **estritamente dentro do Docker**:
 
-Dinheiro é `INTEGER` de **centavos** no banco e `Decimal` no python; quantidade é
-`INTEGER` de **milésimos** (o cupom pesa com três casas). Não há float em ponto
-nenhum do caminho — inclusive no JSON, onde valor sai como string. Somar gasto
-tem de fechar no centavo.
+```bash
+# Subir a aplicação em modo dev com live reload:
+docker compose run --rm --service-ports dev
 
-Um processo só escreve no banco. É por isso que o vigia de preços vai rodar como
-tarefa de fundo do próprio servidor, e não em contêiner separado: dois
-escritores em sqlite é o caminho curto para `database is locked`.
+# Executar a suíte de testes automatizados:
+docker compose run --rm dev pytest -q
+
+# Executar o linter e analisador de código:
+docker compose run --rm dev ruff check .
+```
 
 ---
 
-## O que falta
+## Variáveis de Ambiente (`.env`)
 
-- **Ler a tela da consulta completa item a item.** O caminho da chave já está
-  de pé e grava o HTML cru em `dados/cupons/<chave>.html`, mas o parser só
-  reconhece o layout do DANFE da rota do QR; se a consulta completa vier
-  diferente, o cupom entra sem itens e com aviso (`LayoutDesconhecido`). Falta a
-  primeira amostra real virar fixture — e, se a tela trouxer **GTIN e NCM**, que
-  o DANFE não traz, o casamento de produto melhora de graça.
-- **OCR do cupom inteiro**, para comércio que não emite NFC-e. O lugar está
-  reservado: `cupom.origem` já aceita `'foto'` e o Pillow já está na imagem.
-- Ajustar quantidade do item direto na lista (hoje entra 1 e edita-se pela API).
-- Produto a granel (`CEBOLA NACIONAL KG`) nunca terá código de barras. A fila de
-  enriquecimento já os manda para o fim depois da primeira tentativa, mas dava
-  para reconhecê-los pela unidade e nem perguntar.
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `APP_MODE` | `home` | Modo de operação: `home`, `dev` ou `demo`. |
+| `DADOS` | `/dados` | Diretório onde residem o SQLite (`mise_en_prato.db`), fotos de receitas e cupons HTML crus. |
+| `MORADORES` | `""` | Mapeamento `login_tailscale=Nome,login_tailscale2=Nome2`. O e-mail exato fornecido pelo `tailscale whois`. |
+| `ESCUTAR` | `0.0.0.0` | IP em que o Uvicorn prende o socket. Em produção, prende no IP da Tailnet. |
+| `PORTA` | `8090` | Porta HTTP da aplicação. |
+| `LOCAL` | `-25.2947,-54.0940` | Coordenadas de latitude/longitude usadas como centro para busca de preços no Menor Preço. |
+| `RAIO_KM` | `15` | Raio em km para busca de preços locais. |
+| `TETO_CONSULTAS_HORA`| `50` | Limite ético de consultas horárias à API da CELEPAR (ritmo humano). |
+| `EXIGIR_TAILNET` | `true` | Quando `true`, consulta o socket do Tailscaled para identificar o morador. Em `dev` fica `false`. |
+
+### Autenticação Transparente via Tailscale (Zero Senhas)
+
+No modo `home`, o servidor não possui tela de login ou banco de senhas:
+- O contêiner roda com `network_mode: host` e acessa o socket Unix do Tailscale (`/var/run/tailscale/tailscaled.sock`).
+- Ao receber uma requisição no IP da tailnet, o backend pergunta diretamente à LocalAPI do daemon quem é o dono daquele IP de origem.
+- Se o morador constar em `MORADORES`, a requisição é autenticada e as compras e listas são atribuídas àquela pessoa.
+- IPs desconhecidos na tailnet (ex: compartilhamento de nó) recebem HTTP 403.
+- O uso de `network_mode: host` é indispensável: se estivesse em rede de bridge comum, o Docker mascararia o IP de origem com o gateway interno (`172.x`), quebrando a identificação da Tailscale LocalAPI.
+
+---
+
+## Ingestão de Cupons Fiscais
+
+Como o Safari do iOS não possui a API nativa `BarcodeDetector`, o `mise-en-prato` processa a decodificação no servidor, padronizando a experiência em qualquer navegador móvel:
+
+1. **Fotografar o QR Code (Principal):** Abra a PWA, toque no FAB central e escolha *Fotografar QR do Cupom*. O servidor recebe a imagem e extrai a URL fiscal da SEFAZ-PR.
+2. **Colar o Link Fiscal:** O app de câmera nativo do celular lê o QR e sugere o link; basta colar no campo da aplicação.
+3. **Atalho do iOS:** Disparo em um toque diretamente da tela inicial do iPhone:
+   - App Atalhos → Novo atalho → **Ler código QR**
+   - → **Obter conteúdo do URL**: `POST` para `http://100.122.128.48:8090/api/cupom` com corpo JSON `{"url": "..."}`.
+4. **Consulta pela Chave de Acesso (44 dígitos + Captcha):** Quando o cupom impresso em papel térmico está amassado ou manchado e o QR Code é ilegível, utiliza-se a segunda porta do portal da Fazenda. O morador digita os 44 números, a aplicação busca o desafio de imagem (captcha da SEFAZ) e o exibe na tela para validação humana.
+
+> Reenviar o mesmo cupom não duplica registros: a chave de acesso de 44 dígitos é a chave primária imutável da nota.
+
+### A Escada de Escalas do QR Code (Por que fotos de celular falham?)
+
+Câmeras modernas de smartphones entregam fotos em resoluções altíssimas (ex: 4032x3024). O QR Code da NFC-e possui ~45 módulos de lado. Em resoluções elevadas, cada módulo passa a ocupar ~40 pixels. Contudo, em impressoras térmicas de supermercado, o papel não gera quadrados pretos sólidos: gera nuvens de pontos chapiscados com falhas. O decodificador `zbar` tenta ler o ruído microscópico em vez dos módulos e desiste.
+
+O `mise_en_prato/qr.py` implementa uma **escada de escalas descendente com desfoque proporcional**:
+```
+Resolução original (4032px) ............... falhou
+Redução 1600, 1200, 900 ................... falhou
+Desfoque gaussiano + Redução para 400-600px  achou em < 1s
+```
+Se o `zbar` não conseguir decodificar, o pipeline recorre automaticamente ao `zxing-cpp` como segunda opinião.
+
+### A Chave de 44 Dígitos e o Hash do CSC
+
+Por que não podemos simplesmente consultar a rota do QR usando a chave de 44 dígitos?
+A URL do QR Code termina com um parâmetro `p=<chave>|2|1|1|<sha1>`, onde o hash SHA-1 é gerado pelo emissor a partir do CSC (Código de Segurança do Contribuinte) — um segredo fiscal não impresso no cupom. Sem o CSC, a rota do QR rejeita a requisição.
+Por isso, a consulta por chave utiliza a **Consulta Completa da NFC-e** via formulário com captcha, que é 100% suportada pela aplicação.
+
+Além disso, a chave de acesso é auto-verificável:
+- O 44º dígito é calculado via módulo 11 sobre os 43 dígitos precedentes. O backend valida isso antes de gastar tempo com a SEFAZ.
+- Os dígitos são estruturados e posicionais: revelam UF, ano/mês de emissão, CNPJ do estabelecimento, série e número da nota fiscal.
+
+---
+
+## A Disciplina com a API do Menor Preço
+
+O `mise-en-prato` consulta a API pública do [Menor Preço Nota Paraná](https://menorpreco.notaparana.pr.gov.br/) sob demanda estrita para encontrar cotações na região geográfica:
+
+1. **Exclusivamente Disparado por Pessoas:** Zero cron jobs, zero varreduras automáticas periódicas em laço infinito.
+2. **User-Agent Transparente e Honesto:** A aplicação se identifica como `mise-en-prato/<versao> (uso pessoal...)`.
+3. **Teto de Consultas:** Máximo configurável de 50 consultas por hora (~uma a cada 72 segundos), simulando a cadência humana.
+4. **Cache Local no SQLite:** Preços obtidos respondem consultas subsequentes, reduzindo o volume de chamadas externas.
+5. **Filtro Sanitário Anti-Envenenamento (`sanidade.py`):** A API do Menor Preço entra em modo degradado quando detecta requisições de clientes genéricos, retornando códigos HTTP 200 recheados de dados fictícios (lojas `ZTEST`, municípios do PR marcados como PE, NCMs de 9 dígitos). O `sanidade.py` analisa a resposta e descarta imediatamente payloads envenenados.
+
+---
+
+## Arquitetura de Dados & Rigor Matemático
+
+- **Zero Ponto Flutuante (No Floats):**
+  - **Valores Monetários:** Armazenados como `INTEGER` em **centavos** no banco e manipulados estritamente como `Decimal` no Python.
+  - **Pesos de Mercado:** Armazenados como `INTEGER` em **milésimos** (3 casas decimais).
+  - **Ingredientes de Receitas:** Quantidades armazenadas como `INTEGER` em centavos (escala 100) no SQLite e formatadas como `Decimal` ou frações visuais amigáveis (`formatar_fracao_culinaria`).
+  - Nenhuma operação financeira ou culinária sofre com perda de precisão binária de ponto flutuante.
+- **SQLite em Modo WAL:** Operação concorrente veloz e segura. Um único processo gravador no backend elimina problemas de lock de banco de dados.
+- **Migrações Sequenciais:** Todas as alterações de banco de dados utilizam arquivos SQL versionados em `mise_en_prato/migracoes/` (do `001_inicial.sql` ao `012_receita_fotos.sql`).
+
+---
+
+## Estrutura do Código
+
+```
+mise-en-prato/
+├── compose.yaml                  # Serviços Docker (app em host mode e dev com live-reload)
+├── Dockerfile                    # Multi-stage build (producao e dev com pytest/ruff)
+├── pyproject.toml                # Dependências Python 3.13 e configurações de ferramentas
+├── AGENTS.md                     # Diretrizes de arquitetura, stack e comandos
+│
+├── mise_en_prato/                # Pacote principal
+│   ├── banco.py                  # Conexão SQLite (WAL), conversão de tipos e migrações
+│   ├── catalogo.py               # Catálogo satélite offline (Open Food Facts / CMED)
+│   ├── config.py                 # Pydantic Settings e detecção de ambiente (APP_MODE)
+│   ├── consulta_chave.py         # Consulta à SEFAZ via chave de acesso com captcha
+│   ├── cupons.py                 # Ingestão de cupons, deduplicação e catálogo
+│   ├── enriquecimento.py         # Cascata de identificação de itens (memória -> satélite -> SEFAZ)
+│   ├── identidade.py             # Validação de moradores via socket do Tailscale
+│   ├── listas.py                 # Gestão de listas de compras e comparação entre lojas
+│   ├── main.py                   # Endpoints REST FastAPI e inicialização do servidor
+│   ├── menor_preco.py            # Cliente HTTP do Menor Preço Nota Paraná
+│   ├── nfce_pr.py                # Parser lxml do HTML da SEFAZ-PR
+│   ├── ocr.py                    # Fallback com Tesseract OCR para cupons não-eletrônicos
+│   ├── qr.py                     # Escada de redução de imagens e leitura de QR Codes
+│   ├── receitas.py               # Lógica de receitas, cálculo de porções e fotos WebP
+│   ├── relatorios.py             # Consultas analíticas de despesas e séries de preços
+│   ├── reprocessar.py            # Reprocessamento de cupons arquivados
+│   ├── sanidade.py               # Validação de respostas da CELEPAR contra bases de teste
+│   ├── tarefas.py                # Fila de tarefas assíncronas em segundo plano
+│   ├── unificacao.py             # Deduplicação de produtos e normalização
+│   │
+│   ├── migracoes/                # Scripts SQL sequenciais (001 a 012)
+│   └── web/                      # Frontend PWA (Vanilla JS, sem etapa de build)
+│       ├── index.html            # Estrutura HTML5 com dock flutuante e bottom sheet
+│       ├── estilo.css            # Design tokens "Ferro Fundido e Sal Marinho"
+│       ├── app.js                # Orquestração do cliente, cupons, gastos e listas
+│       ├── receitas.js           # Catálogo de receitas, Modo Cozinha e Wake Lock
+│       ├── sw.js                 # Service Worker para cache e PWA offline
+│       └── manifest.webmanifest  # Configuração de instalação móvel
+│
+├── tests/                        # Suíte de testes automatizados com pytest
+│   ├── test_api.py               # Testes dos endpoints HTTP principais
+│   ├── test_api_receitas.py      # Testes de integração das rotas de receitas e fotos
+│   ├── test_receitas.py          # Testes unitários do parser de texto e Modo Cozinha
+│   ├── test_cupons.py            # Testes de ingestão e casamento de itens
+│   ├── test_qr.py                # Testes da escada de decodificação de QR
+│   ├── test_nfce_pr.py           # Testes do parser contra HTMLs reais da SEFAZ
+│   └── fixtures/                 # Cupons reais arquivados e payloads JSON de teste
+└── docs/                         # Documentos de design e arquitetura detalhados
+```
+
+---
+
+## Validação e Qualidade de Código
+
+Conforme estabelecido em `AGENTS.md`, o host não deve executar `pip`, `pytest` ou `ruff` diretamente fora dos contêineres:
+
+```bash
+# Executar verificação de linting e formatação:
+docker compose run --rm dev ruff check .
+
+# Executar suíte completa de testes:
+docker compose run --rm dev pytest -q
+```
+
+Garantia de 100% dos testes verdes e zero advertências de linting antes de cada commit.
