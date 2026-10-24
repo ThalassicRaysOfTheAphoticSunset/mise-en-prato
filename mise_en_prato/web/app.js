@@ -2400,4 +2400,8 @@ api('/api/cupons').then(({ cupons, revisao }) => {
 }).catch(() => {});
 
 mudarAba('receitas');
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').then((reg) => {
+    reg.update().catch(() => {});
+  }).catch(() => {});
+}
