@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#111512">
+  <meta name="theme-color" content="#111416">
   <title>mise-en-prato</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/estilo.css">
@@ -14,23 +14,83 @@
 </head>
 
 <body>
-  <header>
-    <h1>cupomzinho</h1>
-    <span id="quem" class="quem"></span>
+  <header class="app-header">
+    <div class="header-marca">
+      <h1 class="logo-editorial">mise-en-prato</h1>
+      <span id="badge-demo" class="badge-demo" hidden>Demo</span>
+    </div>
+    <div class="header-acoes">
+      <button type="button" id="header-btn-revisao" class="badge-revisao-alerta" onclick="mudarAba('revisao')" hidden title="Cupons aguardando conferência">
+        <span class="alerta-ponto"></span>
+        <span id="header-revisao-cont">0</span> a revisar
+      </button>
+      <span id="quem" class="quem"></span>
+    </div>
   </header>
 
-  <nav id="abas">
-    <button data-aba="enviar" class="ativa">Enviar</button>
+  <!-- Dock Flutuante de Navegação (Mobile-First / Tablet) -->
+  <nav id="dock-nav" class="dock-flutuante" aria-label="Navegação Principal">
+    <button type="button" data-aba="receitas" class="dock-item ativa" title="Receitas">
+      <svg class="dock-icone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+        <path d="M8 7h8M8 11h6"/>
+      </svg>
+      <span class="dock-rotulo">Receitas</span>
+    </button>
+
+    <button type="button" data-aba="lista" class="dock-item" title="Lista de Compras">
+      <svg class="dock-icone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="9" cy="21" r="1"/>
+        <circle cx="20" cy="21" r="1"/>
+        <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+      </svg>
+      <span class="dock-rotulo">Lista</span>
+    </button>
+
+    <!-- FAB Central de Ação Rápida -->
+    <div class="dock-fab-container">
+      <button type="button" id="btn-fab-acoes" class="dock-fab" aria-label="Ações Rápidas" title="Ações Rápidas" onclick="toggleSheetAcoes()">
+        <svg class="fab-icone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19"/>
+          <line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+      </button>
+    </div>
+
+    <button type="button" data-aba="produtos" class="dock-item" title="Produtos e Despensa">
+      <svg class="dock-icone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/>
+        <line x1="3" y1="6" x2="21" y2="6"/>
+        <path d="M16 10a4 4 0 0 1-8 0"/>
+      </svg>
+      <span class="dock-rotulo">Produtos</span>
+    </button>
+
+    <button type="button" data-aba="gastos" class="dock-item" title="Gastos e Finanças">
+      <svg class="dock-icone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="18" y1="20" x2="18" y2="10"/>
+        <line x1="12" y1="20" x2="12" y2="4"/>
+        <line x1="6" y1="20" x2="6" y2="14"/>
+      </svg>
+      <span class="dock-rotulo">Gastos</span>
+      <span id="dock-badge-gastos" class="dock-ponto-alerta" hidden></span>
+    </button>
+  </nav>
+
+  <!-- Compatibilidade com seletores legados -->
+  <nav id="abas" hidden aria-hidden="true">
+    <button data-aba="enviar">Enviar</button>
     <button data-aba="gastos">Gastos</button>
     <button data-aba="produtos">Produtos</button>
-    <button data-aba="receitas">Receitas</button>
+    <button data-aba="receitas" class="ativa">Receitas</button>
     <button data-aba="lista">Lista</button>
     <button data-aba="revisao" id="btn-revisao">Revisão</button>
   </nav>
 
   <main>
     <!-- ── enviar ─────────────────────────────────────────────────────────── -->
-    <section id="aba-enviar">
+    <section id="aba-enviar" hidden>
       <label class="botao-grande" for="foto">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 7h3l2-2h6l2 2h3v12H4z" fill="none" stroke="currentColor" stroke-width="1.6" />
@@ -107,6 +167,15 @@
 
     <!-- ── gastos ─────────────────────────────────────────────────────────── -->
     <section id="aba-gastos" hidden>
+      <div id="gastos-atalho-cupons" class="cartao cartao-resumo-cupons" style="margin-bottom:1rem;cursor:pointer" onclick="mudarAba('enviar')">
+        <div class="linha" style="align-items:center">
+          <div>
+            <strong>🧾 Cupons Fiscais & Notas Registradas</strong>
+            <div class="fraca" style="font-size:.82rem">Consultar cupons lidos, pendências e conferência</div>
+          </div>
+          <span class="seta-atalho" style="font-size:1.1rem;color:var(--oliva-primario)">→</span>
+        </div>
+      </div>
       <div id="gastos-topo"></div>
       <div id="perfil-nutricional-secao" style="margin-top:1rem"></div>
       <h2>Por mês</h2>
@@ -230,7 +299,7 @@
     </section>
 
     <!-- ── receitas ────────────────────────────────────────────────────────── -->
-    <section id="aba-receitas" hidden>
+    <section id="aba-receitas">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;gap:.5rem;flex-wrap:wrap">
         <h2 style="margin:0">Livro de Receitas</h2>
         <button type="button" id="btn-nova-receita" class="acao">+ Nova Receita</button>
@@ -243,8 +312,11 @@
       <div id="chips-categorias-receitas" class="chips-sabores-container" style="margin-bottom:1rem"></div>
 
       <div id="grade-receitas" class="grade-receitas"></div>
-      <div id="receitas-vazio" class="estado" hidden style="text-align:center;padding:2rem">
-        Nenhuma receita cadastrada ainda. Toque em <strong>+ Nova Receita</strong> acima para começar!
+      <div id="receitas-vazio" class="estado-vazio" hidden>
+        <div class="vazio-icone">📖</div>
+        <h3 style="margin:0 0 .4rem;font-family:var(--fonte-display);font-size:1.3rem">Seu livro de receitas está em branco</h3>
+        <p class="fraca" style="margin:0 0 1rem;max-width:24rem">Cadastre aquele prato especial da casa ou envie os ingredientes da feira para começar.</p>
+        <button type="button" class="acao" onclick="abrirModalNovaReceita()">+ Cadastrar Primeira Receita</button>
       </div>
 
       <!-- Modal de Cadastro / Edição de Receita -->
@@ -389,6 +461,74 @@
       </div>
     </section>
   </main>
+
+  <!-- Bottom Sheet de Ações Rápidas -->
+  <div id="sheet-acoes-backdrop" class="sheet-backdrop" hidden onclick="fecharSheetAcoes()"></div>
+  <div id="sheet-acoes" class="sheet-painel" hidden role="dialog" aria-modal="true" aria-label="Ações Rápidas">
+    <div class="sheet-handle"></div>
+    <div class="sheet-cabecalho">
+      <h3 class="sheet-titulo">Ações Rápidas</h3>
+      <button type="button" class="btn-fechar-modal" onclick="fecharSheetAcoes()" aria-label="Fechar">✕</button>
+    </div>
+    <div class="sheet-opcoes">
+      <button type="button" class="sheet-opcao-btn destaque" onclick="acaoRapidaEscanear()">
+        <div class="opcao-icone-wrap camera">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        </div>
+        <div class="opcao-texto">
+          <strong>Fotografar QR do Cupom</strong>
+          <span>Ler nota fiscal da SEFAZ com a câmera</span>
+        </div>
+      </button>
+
+      <button type="button" class="sheet-opcao-btn" onclick="acaoRapidaNovaReceita()">
+        <div class="opcao-icone-wrap receita">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20h9"/>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+          </svg>
+        </div>
+        <div class="opcao-texto">
+          <strong>Cadastrar Nova Receita</strong>
+          <span>Adicionar ao livro com foto e ingredientes</span>
+        </div>
+      </button>
+
+      <button type="button" class="sheet-opcao-btn" onclick="acaoRapidaItemLista()">
+        <div class="opcao-icone-wrap lista">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="8" y1="6" x2="21" y2="6"/>
+            <line x1="8" y1="12" x2="21" y2="12"/>
+            <line x1="8" y1="18" x2="21" y2="18"/>
+            <line x1="3" y1="6" x2="3.01" y2="6"/>
+            <line x1="3" y1="12" x2="3.01" y2="12"/>
+            <line x1="3" y1="18" x2="3.01" y2="18"/>
+          </svg>
+        </div>
+        <div class="opcao-texto">
+          <strong>Item na Lista de Compras</strong>
+          <span>Anotar algo para comprar no mercado</span>
+        </div>
+      </button>
+
+      <button type="button" class="sheet-opcao-btn secundaria" onclick="acaoRapidaOpcoesManuais()">
+        <div class="opcao-icone-wrap manual">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="16" x2="12" y2="12"/>
+            <line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+        </div>
+        <div class="opcao-texto">
+          <strong>Outras Opções de Cupom</strong>
+          <span>Colar link, digitar chave de 44 números ou arquivo HTML</span>
+        </div>
+      </button>
+    </div>
+  </div>
 
   <script src="/app.js"></script>
   <script src="/receitas.js" defer></script>

@@ -1,11 +1,11 @@
 {
-  "name": "cupomzinho",
-  "short_name": "cupomzinho",
-  "description": "Cupom fiscal, gasto de mercado e caça a preço",
+  "name": "mise-en-prato",
+  "short_name": "mise-en-prato",
+  "description": "Receitas, lista de compras e cupons de mercado",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#111512",
-  "theme_color": "#111512",
+  "background_color": "#111416",
+  "theme_color": "#111416",
   "lang": "pt-BR",
   "icons": [
     { "src": "/icone.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
