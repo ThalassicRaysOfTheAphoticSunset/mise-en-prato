@@ -101,11 +101,14 @@ document.addEventListener('visibilitychange', async () => {
 const carregadores = {};
 window.carregadores = carregadores;
 function mudarAba(nome) {
-  document.querySelectorAll('#abas button').forEach((b) => b.classList.toggle('ativa', b.dataset.aba === nome));
+  document.querySelectorAll('#dock-nav button[data-aba], #abas button[data-aba]').forEach((b) => {
+    b.classList.toggle('ativa', b.dataset.aba === nome);
+  });
   ['enviar', 'gastos', 'produtos', 'receitas', 'lista', 'revisao'].forEach((n) => {
     const el = $('#aba-' + n);
     if (el) el.hidden = n !== nome;
   });
+  window.scrollTo({ top: 0, behavior: 'instant' });
   if (nome !== 'lista' && modoMercadoAtivo) {
     desativarWakeLock();
   } else if (nome === 'lista' && modoMercadoAtivo) {
@@ -115,8 +118,80 @@ function mudarAba(nome) {
 }
 window.mudarAba = mudarAba;
 
-document.querySelectorAll('#abas button').forEach((botao) => {
+document.querySelectorAll('#dock-nav button[data-aba], #abas button[data-aba]').forEach((botao) => {
   botao.onclick = () => mudarAba(botao.dataset.aba);
+});
+
+/* ── bottom sheet de ações rápidas ────────────────────────────────────────── */
+function toggleSheetAcoes() {
+  const sheet = $('#sheet-acoes');
+  if (!sheet) return;
+  if (!sheet.hidden) {
+    fecharSheetAcoes();
+  } else {
+    abrirSheetAcoes();
+  }
+}
+window.toggleSheetAcoes = toggleSheetAcoes;
+
+function abrirSheetAcoes() {
+  const sheet = $('#sheet-acoes');
+  const backdrop = $('#sheet-acoes-backdrop');
+  if (sheet) sheet.hidden = false;
+  if (backdrop) backdrop.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+window.abrirSheetAcoes = abrirSheetAcoes;
+
+function fecharSheetAcoes() {
+  const sheet = $('#sheet-acoes');
+  const backdrop = $('#sheet-acoes-backdrop');
+  if (sheet) sheet.hidden = true;
+  if (backdrop) backdrop.hidden = true;
+  document.body.style.overflow = '';
+}
+window.fecharSheetAcoes = fecharSheetAcoes;
+
+function acaoRapidaEscanear() {
+  fecharSheetAcoes();
+  mudarAba('enviar');
+  const foto = $('#foto');
+  if (foto) foto.click();
+}
+window.acaoRapidaEscanear = acaoRapidaEscanear;
+
+function acaoRapidaNovaReceita() {
+  fecharSheetAcoes();
+  mudarAba('receitas');
+  if (typeof window.abrirModalNovaReceita === 'function') {
+    window.abrirModalNovaReceita();
+  }
+}
+window.acaoRapidaNovaReceita = acaoRapidaNovaReceita;
+
+function acaoRapidaItemLista() {
+  fecharSheetAcoes();
+  mudarAba('lista');
+  setTimeout(() => {
+    const inp = $('#busca-sugestoes') || document.querySelector('#aba-lista input');
+    if (inp) inp.focus();
+  }, 120);
+}
+window.acaoRapidaItemLista = acaoRapidaItemLista;
+
+function acaoRapidaOpcoesManuais() {
+  fecharSheetAcoes();
+  mudarAba('enviar');
+  const alt = $('#alt-chave');
+  if (alt) {
+    alt.open = true;
+    alt.scrollIntoView({ behavior: 'smooth' });
+  }
+}
+window.acaoRapidaOpcoesManuais = acaoRapidaOpcoesManuais;
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') fecharSheetAcoes();
 });
 
 /* ── enviar ───────────────────────────────────────────────────────────────── */
@@ -601,6 +676,20 @@ carregadores.enviar = async () => {
   const btnRevisao = $('#btn-revisao');
   if (btnRevisao) {
     btnRevisao.textContent = revisao.length ? `Revisão (${revisao.length})` : 'Revisão';
+  }
+  const headerBtnRevisao = $('#header-btn-revisao');
+  const headerRevisaoCont = $('#header-revisao-cont');
+  const dockBadgeGastos = $('#dock-badge-gastos');
+  if (headerBtnRevisao && headerRevisaoCont) {
+    if (revisao.length) {
+      headerBtnRevisao.hidden = false;
+      headerRevisaoCont.textContent = revisao.length;
+    } else {
+      headerBtnRevisao.hidden = true;
+    }
+  }
+  if (dockBadgeGastos) {
+    dockBadgeGastos.hidden = !revisao.length;
   }
   $('#revisao').innerHTML = revisao.length ? `
     <div class="estado ruim clicavel" onclick="mudarAba('revisao')" style="margin-bottom:.6rem;cursor:pointer">
@@ -1155,7 +1244,7 @@ window.verProduto = async (id) => {
                 </div>
               </div>
               <div style="display:flex;gap:.3rem;align-items:center;flex-wrap:wrap;margin:.2rem 0">
-                ${v.eh_padrao ? '<span class="selo" style="background:var(--verde);color:#06110a;font-weight:600">Padrão</span>' : ''}
+                ${v.eh_padrao ? '<span class="selo" style="background:var(--terracota);color:#fff;font-weight:600">Padrão</span>' : ''}
                 ${v.nutriscore ? `<span class="badge-nutri nutri-${v.nutriscore.toLowerCase()}">${v.nutriscore}</span>` : ''}
                 ${v.nova_group ? `<span class="badge-nova nova-${v.nova_group}">NOVA ${v.nova_group}</span>` : ''}
               </div>
@@ -2242,7 +2331,7 @@ carregadores.revisao = async () => {
           </div>
           <div class="linha" style="gap:.4rem;flex-wrap:wrap">
             <button type="button" class="acao" onclick="abrirBancadaRevisao('${c.chave}')"
-                    style="background:var(--verde);color:#fff;font-weight:600">
+                    style="background:var(--terracota);color:#fff;font-weight:600">
               🛠️ Revisar cupom
             </button>
             <button type="button" class="acao" onclick="navigator.clipboard.writeText('${c.chave}');aviso('Chave copiada!')">
@@ -2292,5 +2381,23 @@ carregadores.revisao = async () => {
 /* ── partida ──────────────────────────────────────────────────────────────── */
 api('/api/eu').then((r) => { $('#quem').textContent = r.morador; })
   .catch(() => { $('#quem').textContent = 'não identificado'; });
-carregadores.enviar();
+
+api('/api/cupons').then(({ cupons, revisao }) => {
+  const headerBtnRevisao = $('#header-btn-revisao');
+  const headerRevisaoCont = $('#header-revisao-cont');
+  const dockBadgeGastos = $('#dock-badge-gastos');
+  if (headerBtnRevisao && headerRevisaoCont) {
+    if (revisao && revisao.length) {
+      headerBtnRevisao.hidden = false;
+      headerRevisaoCont.textContent = revisao.length;
+    } else {
+      headerBtnRevisao.hidden = true;
+    }
+  }
+  if (dockBadgeGastos) {
+    dockBadgeGastos.hidden = !(revisao && revisao.length);
+  }
+}).catch(() => {});
+
+mudarAba('receitas');
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
