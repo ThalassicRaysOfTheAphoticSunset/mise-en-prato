@@ -42,3 +42,7 @@ services:
       - TETO_CONSULTAS_HORA=${TETO_CONSULTAS_HORA:-50}
     volumes:
       - .:/app
+
+  cupomzinho:
+    extends: dev
+
