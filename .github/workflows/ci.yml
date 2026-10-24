@@ -45,7 +45,6 @@ jobs:
       - name: Conectar à Tailnet
         uses: tailscale/github-action@v3
         with:
-          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
@@ -60,5 +59,9 @@ jobs:
           echo "$SSH_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+<<<<<<< HEAD
+          ssh -i ~/.ssh/id_deploy -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
+=======
           ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=accept-new "$USER@$HOST" \
+>>>>>>> origin/main
             "cd ~/srv/mise-en-prato && git pull origin main && docker compose build app && docker compose up -d app"
