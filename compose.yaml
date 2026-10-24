@@ -28,6 +28,7 @@ services:
       context: .
       target: dev
     container_name: mise-en-prato-dev
+    command: ["python", "-m", "mise_en_prato"]
     ports:
       - "8090:8090"
     environment:
@@ -40,8 +41,12 @@ services:
       - LOCAL=${LOCAL:--25.2947,-54.0940}
       - RAIO_KM=${RAIO_KM:-15}
       - TETO_CONSULTAS_HORA=${TETO_CONSULTAS_HORA:-50}
+      - DADOS=/dados
     volumes:
       - .:/app
+      - ./dados_teste:/dados
+
+
 
   cupomzinho:
     extends: dev
