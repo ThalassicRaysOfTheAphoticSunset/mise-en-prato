@@ -787,6 +787,116 @@ def remover_variante(
     return True
 
 
+def amarrar_gtin_produto(
+    con_principal: sqlite3.Connection,
+    produto_id: int,
+    gtin: str,
+    sabor: str | None = None,
+    nome: str | None = None,
+    marca: str | None = None,
+    foto_url: str | None = None,
+    nutriscore: str | None = None,
+    nova_group: int | None = None,
+    con_catalogo: sqlite3.Connection | None = None,
+) -> dict:
+    """Atrela um GTIN ao produto, gravando a variante, memória da loja e atualizando compras."""
+    gtin_limpo = normalizar_gtin(gtin)
+    if not gtin_limpo or not digito_gtin_confere(gtin_limpo):
+        raise ValueError("código de barras inválido (dígito verificador incorreto)")
+
+    prod = con_principal.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+    if not prod:
+        raise ValueError("produto não encontrado")
+
+    nome_final = (nome or "").strip() or prod["descricao_canonica"]
+    marca_final = marca or prod["marca"]
+    sabor_final = (sabor or "").strip() or extrair_sabor(nome_final, marca_final) or None
+
+    with con_principal:
+        # 1. Salva variante e sincroniza metadados
+        salvar_variantes_do_produto(
+            con_principal,
+            produto_id,
+            [
+                {
+                    "gtin": gtin_limpo,
+                    "nome": nome_final,
+                    "sabor": sabor_final,
+                    "marca": marca_final,
+                    "foto_url": foto_url,
+                    "nutriscore": nutriscore,
+                    "nova_group": nova_group,
+                    "eh_padrao": 1,
+                    "origem": "amarracao_manual",
+                }
+            ],
+            gtin_padrao=gtin_limpo,
+            con_catalogo=con_catalogo,
+        )
+
+        # 2. Atualiza campos do produto principal
+        con_principal.execute(
+            """UPDATE produto
+                  SET gtin = ?,
+                      marca = COALESCE(?, marca),
+                      foto_url = COALESCE(?, foto_url),
+                      nutriscore = COALESCE(?, nutriscore),
+                      nova_group = COALESCE(?, nova_group),
+                      gtin_buscado_em = datetime('now', 'localtime')
+                WHERE id = ?""",
+            (gtin_limpo, marca_final, foto_url, nutriscore, nova_group, produto_id),
+        )
+
+        # 3. Mapeia todos os códigos de loja associados a este produto em compras existentes
+        lojas = con_principal.execute(
+            """SELECT DISTINCT c.cnpj, i.codigo_loja
+                 FROM item i
+                 JOIN cupom c ON c.chave = i.chave
+                WHERE i.produto_id = ?
+                  AND i.codigo_loja IS NOT NULL
+                  AND TRIM(i.codigo_loja) != ''""",
+            (produto_id,),
+        ).fetchall()
+
+        for loja in lojas:
+            con_principal.execute(
+                """INSERT INTO codigo_loja_produto
+                       (cnpj, codigo_loja, produto_id, gtin, sabor, atualizado_em)
+                   VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                   ON CONFLICT(cnpj, codigo_loja) DO UPDATE SET
+                       produto_id = excluded.produto_id,
+                       gtin = excluded.gtin,
+                       sabor = excluded.sabor,
+                       atualizado_em = excluded.atualizado_em""",
+                (loja["cnpj"], loja["codigo_loja"], produto_id, gtin_limpo, sabor_final),
+            )
+
+        # 4. Atualiza compras passadas retroativamente
+        con_principal.execute(
+            """UPDATE item
+                  SET gtin_variante = COALESCE(gtin_variante, ?),
+                      sabor_adicional = COALESCE(sabor_adicional, ?)
+                WHERE produto_id = ?""",
+            (gtin_limpo, sabor_final, produto_id),
+        )
+
+    log.info(
+        "produto %s (%s) amarrado ao gtin %s (sabor=%s, lojas_vinculadas=%d)",
+        produto_id,
+        nome_final,
+        gtin_limpo,
+        sabor_final,
+        len(lojas),
+    )
+    return {
+        "ok": True,
+        "produto_id": produto_id,
+        "gtin": gtin_limpo,
+        "sabor": sabor_final,
+        "lojas_amarradas": len(lojas),
+    }
+
+
 def main():
     """CLI para gestão e ingestão de dumps no catálogo satélite."""
     import argparse

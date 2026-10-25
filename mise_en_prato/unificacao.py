@@ -64,6 +64,74 @@ def parecidos(a: str, b: str) -> str | None:
     return None
 
 
+def _info_produto_comparativo(
+    con: sqlite3.Connection, produto_id: int, desc_fallback: str, linhas: int, gasto: int | None
+) -> dict:
+    prod = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
+
+    dados_compras = con.execute(
+        """
+        SELECT MIN(i.unitario_centavos) AS menor_preco,
+               MAX(i.unitario_centavos) AS maior_preco,
+               MAX(c.emitido_em) AS ultima_data
+          FROM item i
+          JOIN cupom c ON c.chave = i.chave
+         WHERE i.produto_id = ?
+    """,
+        (produto_id,),
+    ).fetchone()
+
+    ultima_loja = None
+    if dados_compras and dados_compras["ultima_data"]:
+        loja_row = con.execute(
+            """
+            SELECT COALESCE(e.fantasia, e.razao) AS loja
+              FROM cupom c
+              LEFT JOIN estabelecimento e ON e.cnpj = c.cnpj
+              JOIN item i ON i.chave = c.chave
+             WHERE i.produto_id = ? AND c.emitido_em = ?
+             LIMIT 1
+        """,
+            (produto_id, dados_compras["ultima_data"]),
+        ).fetchone()
+        if loja_row and loja_row["loja"]:
+            ultima_loja = loja_row["loja"]
+
+    sabores_set = set()
+    try:
+        sql_var = (
+            "SELECT DISTINCT sabor FROM produto_variante "
+            "WHERE produto_id = ? AND sabor IS NOT NULL"
+        )
+        for r in con.execute(sql_var, (produto_id,)):
+            if r["sabor"]:
+                sabores_set.add(r["sabor"])
+        sql_item = (
+            "SELECT DISTINCT sabor_adicional FROM item "
+            "WHERE produto_id = ? AND sabor_adicional IS NOT NULL"
+        )
+        for r in con.execute(sql_item, (produto_id,)):
+            if r["sabor_adicional"]:
+                sabores_set.add(r["sabor_adicional"])
+    except sqlite3.OperationalError:
+        pass
+
+    return {
+        "id": produto_id,
+        "descricao": prod["descricao_canonica"] if prod else desc_fallback,
+        "gtin": prod["gtin"] if prod else None,
+        "foto_url": prod["foto_url"] if prod else None,
+        "marca": prod["marca"] if prod else None,
+        "linhas": linhas,
+        "gasto": gasto or 0,
+        "menor_preco": dados_compras["menor_preco"] if dados_compras else None,
+        "maior_preco": dados_compras["maior_preco"] if dados_compras else None,
+        "ultima_data": dados_compras["ultima_data"] if dados_compras else None,
+        "ultima_loja": ultima_loja,
+        "sabores": sorted(list(sabores_set)),
+    }
+
+
 def candidatos(con: sqlite3.Connection) -> list[dict]:
     """Pares que valem uma olhada humana, do mais forte para o mais fraco."""
     produtos = list(con.execute("""
@@ -80,6 +148,16 @@ def candidatos(con: sqlite3.Connection) -> list[dict]:
             variantes_por_produto.setdefault(r["produto_id"], set()).add(r["gtin"])
     except sqlite3.OperationalError:
         pass
+
+    infos_por_id: dict[int, dict] = {}
+
+    def get_info(prod_row):
+        pid = prod_row["id"]
+        if pid not in infos_por_id:
+            infos_por_id[pid] = _info_produto_comparativo(
+                con, pid, prod_row["desc"], prod_row["linhas"], prod_row["gasto"]
+            )
+        return infos_por_id[pid]
 
     achados = []
     for k, a in enumerate(produtos):
@@ -108,8 +186,8 @@ def candidatos(con: sqlite3.Connection) -> list[dict]:
             achados.append({
                 "forca": forca, "motivo": motivo,
                 # o que tem mais histórico fica, para mexer em menos linhas
-                "manter": {"id": a["id"], "descricao": a["desc"], "linhas": a["linhas"]},
-                "juntar": {"id": b["id"], "descricao": b["desc"], "linhas": b["linhas"]},
+                "manter": get_info(a),
+                "juntar": get_info(b),
             })
     for c in achados:
         if c["juntar"]["linhas"] > c["manter"]["linhas"]:
@@ -193,3 +271,171 @@ def recusar(con: sqlite3.Connection, desc_a: str, desc_b: str) -> None:
     with con:
         con.execute("INSERT OR IGNORE INTO unificacao_recusada (desc_a, desc_b) VALUES (?, ?)",
                     (a, b))
+
+
+def unificar_como_linha(
+    con: sqlite3.Connection,
+    mestre_id: int,
+    variante_id: int,
+    sabor_mestre: str | None = None,
+    sabor_variante: str | None = None,
+) -> dict:
+    """Transforma `variante_id` em um sabor/variante sob o produto `mestre_id`,
+
+    migrando seu histórico de compras com a rotulagem de sabor correspondente.
+    """
+    if mestre_id == variante_id:
+        raise ValueError("não dá para agrupar um produto com ele mesmo")
+
+    alvo = con.execute("SELECT * FROM produto WHERE id = ?", (mestre_id,)).fetchone()
+    outro = con.execute("SELECT * FROM produto WHERE id = ?", (variante_id,)).fetchone()
+    if not alvo or not outro:
+        raise ValueError("produto não encontrado")
+
+    from .catalogo import extrair_sabor
+
+    s_var = (sabor_variante or "").strip()
+    if not s_var:
+        s_var = (
+            extrair_sabor(outro["descricao_canonica"], outro["marca"])
+            or outro["descricao_canonica"]
+        )
+
+    s_mestre = (sabor_mestre or "").strip() or None
+    gtin_var = outro["gtin"] or f"sabor:{variante_id}"
+
+    with con:
+        # Se o mestre não tinha variantes mas tinha GTIN, cria a variante padrão para o mestre
+        try:
+            var_mestre_count = con.execute(
+                "SELECT COUNT(*) as c FROM produto_variante WHERE produto_id = ?",
+                (mestre_id,),
+            ).fetchone()["c"]
+            if var_mestre_count == 0 and alvo["gtin"]:
+                con.execute(
+                    """INSERT OR IGNORE INTO produto_variante (
+                           produto_id, gtin, nome, sabor, marca, nutriscore,
+                           nova_group, foto_url, eh_padrao, origem, criado_em
+                       ) VALUES (
+                           ?, ?, ?, ?, ?, ?, ?, ?, 1, 'mestre_original',
+                           datetime('now', 'localtime')
+                       )""",
+                    (
+                        mestre_id,
+                        alvo["gtin"],
+                        alvo["descricao_canonica"],
+                        s_mestre,
+                        alvo["marca"],
+                        alvo["nutriscore"],
+                        alvo["nova_group"],
+                        alvo["foto_url"],
+                    ),
+                )
+        except sqlite3.OperationalError:
+            pass
+
+        # Insere a nova variante correspondente ao produto absorvido
+        try:
+            con.execute(
+                """INSERT OR REPLACE INTO produto_variante (
+                       produto_id, gtin, nome, sabor, marca, nutriscore,
+                       nova_group, foto_url, eh_padrao, origem, criado_em
+                   ) VALUES (
+                       ?, ?, ?, ?, ?, ?, ?, ?, 0, 'unificacao_linha',
+                       datetime('now', 'localtime')
+                   )""",
+                (
+                    mestre_id,
+                    gtin_var,
+                    outro["descricao_canonica"],
+                    s_var,
+                    outro["marca"],
+                    outro["nutriscore"],
+                    outro["nova_group"],
+                    outro["foto_url"],
+                ),
+            )
+            # Transfere quaisquer outras variantes já existentes no produto absorvido
+            con.execute(
+                "UPDATE OR IGNORE produto_variante SET produto_id = ? WHERE produto_id = ?",
+                (mestre_id, variante_id),
+            )
+            con.execute("DELETE FROM produto_variante WHERE produto_id = ?", (variante_id,))
+        except sqlite3.OperationalError:
+            pass
+
+        # Atualiza compras do produto absorvido para apontarem para o mestre com o sabor preenchido
+        con.execute(
+            """UPDATE item
+                  SET produto_id = ?,
+                      gtin_variante = COALESCE(gtin_variante, ?),
+                      sabor_adicional = COALESCE(sabor_adicional, ?)
+                WHERE produto_id = ?""",
+            (mestre_id, outro["gtin"], s_var, variante_id),
+        )
+
+        # Se sabor do mestre foi informado, preenche itens do mestre que estavam sem sabor
+        if s_mestre:
+            con.execute(
+                """UPDATE item
+                      SET sabor_adicional = COALESCE(sabor_adicional, ?)
+                    WHERE produto_id = ? AND sabor_adicional IS NULL""",
+                (s_mestre, mestre_id),
+            )
+
+        # Atualiza memória de loja do produto absorvido
+        try:
+            con.execute(
+                """UPDATE OR IGNORE codigo_loja_produto
+                      SET produto_id = ?,
+                          gtin = COALESCE(gtin, ?),
+                          sabor = COALESCE(sabor, ?)
+                    WHERE produto_id = ?""",
+                (mestre_id, outro["gtin"], s_var, variante_id),
+            )
+            con.execute("DELETE FROM codigo_loja_produto WHERE produto_id = ?", (variante_id,))
+        except sqlite3.OperationalError:
+            pass
+
+        # Move preços, apelidos e lista de compras
+        con.execute(
+            "UPDATE OR IGNORE preco SET produto_id = ? WHERE produto_id = ?",
+            (mestre_id, variante_id),
+        )
+        con.execute("DELETE FROM preco WHERE produto_id = ?", (variante_id,))
+        con.execute(
+            "UPDATE apelido_loja SET produto_id = ? WHERE produto_id = ?",
+            (mestre_id, variante_id),
+        )
+        con.execute(
+            "UPDATE OR IGNORE lista_item SET produto_id = ? WHERE produto_id = ?",
+            (mestre_id, variante_id),
+        )
+        con.execute("DELETE FROM lista_item WHERE produto_id = ?", (variante_id,))
+
+        # Remove o produto absorvido da tabela produto
+        con.execute("DELETE FROM produto WHERE id = ?", (variante_id,))
+
+        # Herança de atributos se o mestre não tiver
+        campos_heranca = (
+            "categoria", "marca", "nutriscore", "nova_group", "foto_url"
+        )
+        for campo in campos_heranca:
+            if campo in alvo.keys() and not alvo[campo] and outro[campo]:
+                con.execute(
+                    f"UPDATE produto SET {campo} = ? WHERE id = ?",  # noqa: S608
+                    (outro[campo], mestre_id),
+                )
+
+    log.info(
+        "agrupado como linha multissabor: %r adotou %r como sabor %r",
+        alvo["descricao_canonica"],
+        outro["descricao_canonica"],
+        s_var,
+    )
+    return {
+        "mestre_id": mestre_id,
+        "variante_id": variante_id,
+        "sabor": s_var,
+        "absorvido": outro["descricao_canonica"],
+    }

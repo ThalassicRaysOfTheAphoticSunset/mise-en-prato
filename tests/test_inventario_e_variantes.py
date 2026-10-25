@@ -280,6 +280,7 @@ def test_api_associar_variante_item(tmp_path, monkeypatch):
     assert mem["sabor"] == "Chocolatto"
 
 
+
 def test_api_desmembrar_produto(tmp_path, monkeypatch):
     """Testa endpoint POST /api/produto/{id}/desmembrar separando variante em produto autônomo."""
     monkeypatch.setenv("DADOS", str(tmp_path))
@@ -634,3 +635,84 @@ def test_desmembrar_limpa_precos_pai_e_preenche_itens(tmp_path, monkeypatch):
     ).fetchone()
     assert clp is not None
     assert clp["produto_id"] == novo_id
+
+
+def test_amarrar_gtin_produto_fluxo_completo(con):
+    """Testa amarrar_gtin_produto: atualiza produto, variante, loja e retroage itens."""
+    from mise_en_prato.catalogo import amarrar_gtin_produto
+
+    p_id = con.execute(
+        "INSERT INTO produto (descricao_canonica) VALUES ('BARRA CEREAL NUTRY')"
+    ).lastrowid
+    cnpj = "00000000000191"
+    con.execute(
+        "INSERT INTO estabelecimento (cnpj, razao) VALUES (?, 'Mercado Muffato')", (cnpj,)
+    )
+    con.execute(
+        """INSERT INTO cupom (chave, cnpj, emitido_em, completo, criado_em)
+           VALUES ('c_nutry', ?, '2026-10-23', 1, '2026-10-23')""",
+        (cnpj,),
+    )
+    con.execute(
+        """INSERT INTO item (id, chave, seq, descricao, codigo_loja, unidade,
+                             quantidade_milesimos, unitario_centavos, total_centavos, produto_id)
+           VALUES (7001, 'c_nutry', 1, 'BARRA CER NUTRY 22G', '147690', 'UN', 1000, 159, 159, ?)""",
+        (p_id,),
+    )
+    con.commit()
+
+    res = amarrar_gtin_produto(
+        con,
+        p_id,
+        gtin="7896045102556",
+        sabor="Castanha do Pará",
+        nome="Barra de Cereal Nutry Castanha do Pará 22g",
+        marca="Nutry",
+    )
+    assert res["ok"] is True
+    assert res["gtin"] == "7896045102556"
+    assert res["sabor"] == "Castanha do Pará"
+    assert res["lojas_amarradas"] == 1
+
+    # 1. Produto atualizado
+    prod = con.execute("SELECT * FROM produto WHERE id = ?", (p_id,)).fetchone()
+    assert prod["gtin"] == "7896045102556"
+    assert prod["marca"] == "Nutry"
+
+    # 2. Variante inserida
+    var = con.execute(
+        "SELECT * FROM produto_variante WHERE produto_id = ?", (p_id,)
+    ).fetchone()
+    assert var["gtin"] == "7896045102556"
+    assert var["sabor"] == "Castanha do Pará"
+    assert var["eh_padrao"] == 1
+
+    # 3. Código de loja gravado
+    clp = con.execute(
+        "SELECT * FROM codigo_loja_produto WHERE cnpj = '00000000000191' AND codigo_loja = '147690'"
+    ).fetchone()
+    assert clp is not None
+    assert clp["produto_id"] == p_id
+    assert clp["gtin"] == "7896045102556"
+    assert clp["sabor"] == "Castanha do Pará"
+
+    # 4. Item retroativo atualizado
+    it = con.execute("SELECT * FROM item WHERE produto_id = ?", (p_id,)).fetchone()
+    assert it["gtin_variante"] == "7896045102556"
+    assert it["sabor_adicional"] == "Castanha do Pará"
+
+
+def test_amarrar_gtin_produto_validacoes(con):
+    """Garante erro ao tentar amarrar com GTIN inválido ou produto inexistente."""
+    from mise_en_prato.catalogo import amarrar_gtin_produto
+
+    p_id = con.execute("INSERT INTO produto (descricao_canonica) VALUES ('X')").lastrowid
+
+    # GTIN inválido
+    with pytest.raises(ValueError, match="código de barras inválido"):
+        amarrar_gtin_produto(con, p_id, gtin="123456")
+
+    # Produto inexistente com GTIN válido
+    with pytest.raises(ValueError, match="produto não encontrado"):
+        amarrar_gtin_produto(con, 99999, gtin="7896045102556")
+
