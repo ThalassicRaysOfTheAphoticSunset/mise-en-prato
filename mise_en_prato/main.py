@@ -676,6 +676,13 @@ class Unir(BaseModel):
     juntar: int
 
 
+class UnirComoLinha(BaseModel):
+    mestre_id: int
+    variante_id: int
+    sabor_mestre: str | None = None
+    sabor_variante: str | None = None
+
+
 class Recusa(BaseModel):
     desc_a: str
     desc_b: str
@@ -691,6 +698,23 @@ async def ver_candidatos(_: Morador, con: Banco):
 async def unir(uniao: Unir, _: Morador, con: Banco):
     try:
         return responder(unificacao.unificar(con, uniao.manter, uniao.juntar))
+    except ValueError as erro:
+        raise HTTPException(400, str(erro)) from erro
+
+
+@app.post("/api/unificar/como-linha")
+async def unir_como_linha(dados: UnirComoLinha, _: Morador, con: Banco):
+    """Agrupa uma duplicata como variante/sabor de uma linha multissabor mestre."""
+    try:
+        return responder(
+            unificacao.unificar_como_linha(
+                con,
+                dados.mestre_id,
+                dados.variante_id,
+                dados.sabor_mestre,
+                dados.sabor_variante,
+            )
+        )
     except ValueError as erro:
         raise HTTPException(400, str(erro)) from erro
 
@@ -814,13 +838,16 @@ def buscar_candidatos_gtin(produto_id: int, request: Request, _: Morador):
         gtin = str(a.get("gtin") or "").strip()
         if not gtin or not sanidade.digito_gtin_confere(gtin):
             continue
+        desc_candidato = a.get("descricao") or descricao
+        sabor_inf = catalogo.extrair_sabor(desc_candidato, a.get("loja"))
         if gtin not in candidatos_map:
             candidatos_map[gtin] = {
                 "gtin": gtin,
-                "descricao": a.get("descricao") or descricao,
+                "descricao": desc_candidato,
                 "preco": float(a.get("preco") or 0),
                 "loja": a.get("loja") or "Mercado local",
                 "data": a.get("data") or "",
+                "sabor": sabor_inf or None,
                 "ocorrencias": 1,
             }
         else:
@@ -828,9 +855,20 @@ def buscar_candidatos_gtin(produto_id: int, request: Request, _: Morador):
 
     cat = catalogo.conectar_catalogo(somente_leitura=True)
     if cat:
+        for gtin, cand in list(candidatos_map.items()):
+            achado_cat = catalogo.buscar_por_gtin(cat, gtin, consultar_online_se_faltar=False)
+            if achado_cat:
+                if achado_cat.get("foto_url") and not cand.get("foto_url"):
+                    cand["foto_url"] = achado_cat["foto_url"]
+                if achado_cat.get("sabor") and not cand.get("sabor"):
+                    cand["sabor"] = achado_cat["sabor"]
+
         for item in catalogo.buscar_por_termo(cat, descricao, limite=5):
             g = item["gtin"]
             if g not in candidatos_map:
+                sabor_item = item.get("sabor") or catalogo.extrair_sabor(
+                    item["nome"], item.get("marca")
+                )
                 candidatos_map[g] = {
                     "gtin": g,
                     "descricao": item["nome"],
@@ -838,6 +876,8 @@ def buscar_candidatos_gtin(produto_id: int, request: Request, _: Morador):
                     "loja": item.get("marca") or "Catálogo",
                     "data": "",
                     "ocorrencias": 1,
+                    "foto_url": item.get("foto_url"),
+                    "sabor": sabor_item or None,
                 }
         cat.close()
 
@@ -852,6 +892,42 @@ def buscar_candidatos_gtin(produto_id: int, request: Request, _: Morador):
 
 class DefinirGtin(BaseModel):
     gtin: str
+
+
+class AtrelarGtin(BaseModel):
+    gtin: str
+    sabor: str | None = None
+    nome: str | None = None
+    marca: str | None = None
+    foto_url: str | None = None
+    nutriscore: str | None = None
+    nova_group: int | None = None
+
+
+@app.post("/api/produto/{produto_id}/atrelar-gtin")
+def atrelar_gtin_produto_endpoint(
+    produto_id: int, dados: AtrelarGtin, request: Request, _: Morador
+):
+    """Atrela um GTIN comercial ao produto, suas variantes, lojas e compras passadas."""
+    con = request.app.state.con
+    try:
+        res = catalogo.amarrar_gtin_produto(
+            con,
+            produto_id,
+            dados.gtin,
+            sabor=dados.sabor,
+            nome=dados.nome,
+            marca=dados.marca,
+            foto_url=dados.foto_url,
+            nutriscore=dados.nutriscore,
+            nova_group=dados.nova_group,
+        )
+        prod_atualizado = con.execute(
+            "SELECT * FROM produto WHERE id = ?", (produto_id,)
+        ).fetchone()
+        return responder({**res, "produto": dict(prod_atualizado)})
+    except ValueError as erro:
+        raise HTTPException(400, str(erro)) from erro
 
 
 @app.post("/api/produto/{produto_id}/gtin")
@@ -883,6 +959,36 @@ def definir_gtin_produto(produto_id: int, dados: DefinirGtin, request: Request, 
     enriquecimento.enriquecer_local(con, produto_id)
     prod_atualizado = con.execute("SELECT * FROM produto WHERE id = ?", (produto_id,)).fetchone()
     return responder({"ok": True, "produto": dict(prod_atualizado)})
+
+
+@app.get("/api/sabores")
+def listar_sabores_conhecidos(_: Morador, con: Banco):
+    """Retorna a lista ordenada de todos os sabores conhecidos no banco."""
+    sabores = set()
+    try:
+        sql_var = (
+            "SELECT DISTINCT sabor FROM produto_variante "
+            "WHERE sabor IS NOT NULL AND TRIM(sabor) != ''"
+        )
+        for r in con.execute(sql_var):
+            sabores.add(r["sabor"].strip())
+
+        sql_item = (
+            "SELECT DISTINCT sabor_adicional FROM item "
+            "WHERE sabor_adicional IS NOT NULL AND TRIM(sabor_adicional) != ''"
+        )
+        for r in con.execute(sql_item):
+            sabores.add(r["sabor_adicional"].strip())
+
+        sql_clp = (
+            "SELECT DISTINCT sabor FROM codigo_loja_produto "
+            "WHERE sabor IS NOT NULL AND TRIM(sabor) != ''"
+        )
+        for r in con.execute(sql_clp):
+            sabores.add(r["sabor"].strip())
+    except sqlite3.OperationalError:
+        pass
+    return responder({"sabores": sorted(list(sabores))})
 
 
 class VarianteItem(BaseModel):

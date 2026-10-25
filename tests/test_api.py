@@ -591,5 +591,88 @@ def test_registrar_higieniza_url_qr_no_banco(tmp_path, monkeypatch):
     config.cache_clear()
 
 
+def test_api_listar_sabores(cliente):
+    """GET /api/sabores retorna sabores distintos ordenados."""
+    con = cliente.app.state.con
+    con.execute(
+        """INSERT INTO produto_variante
+               (produto_id, gtin, nome, sabor, eh_padrao, origem, criado_em)
+           VALUES (1, '789999901', 'Produto Teste', 'Morango', 0, 'teste', datetime('now'))"""
+    )
+    con.execute(
+        "UPDATE item SET sabor_adicional = 'Baunilha' WHERE id = (SELECT id FROM item LIMIT 1)"
+    )
+    con.commit()
+
+    r = cliente.get("/api/sabores")
+    assert r.status_code == 200
+    sabores = r.json()["sabores"]
+    assert "Baunilha" in sabores
+    assert "Morango" in sabores
+
+
+def test_api_unificar_como_linha(cliente):
+    """POST /api/unificar/como-linha agrupa produto como variante de sabor."""
+    con = cliente.app.state.con
+    mestre_id = con.execute("SELECT id FROM produto LIMIT 1").fetchone()[0]
+    outro_id = con.execute(
+        "INSERT INTO produto (descricao_canonica, gtin) VALUES ('PROD VARIADO', '789999902')"
+    ).lastrowid
+    con.commit()
+
+    r = cliente.post("/api/unificar/como-linha", json={
+        "mestre_id": mestre_id,
+        "variante_id": outro_id,
+        "sabor_mestre": "Original",
+        "sabor_variante": "Uva",
+    })
+    assert r.status_code == 200
+    corpo = r.json()
+    assert corpo["mestre_id"] == mestre_id
+    assert corpo["sabor"] == "Uva"
+
+
+def test_api_atrelar_gtin(cliente):
+    """POST /api/produto/{id}/atrelar-gtin atrela GTIN e metadados ao produto."""
+    con = cliente.app.state.con
+    p_id = con.execute(
+        "INSERT INTO produto (descricao_canonica) VALUES ('PROD SEM GTIN')"
+    ).lastrowid
+    con.commit()
+
+    r = cliente.post(
+        f"/api/produto/{p_id}/atrelar-gtin",
+        json={
+            "gtin": "7896045102556",
+            "nome": "Bebida Láctea Cappuccino Classic 3 Corações",
+            "sabor": "Classic",
+            "marca": "3 Corações",
+        },
+    )
+    assert r.status_code == 200
+    dados = r.json()
+    assert dados["ok"] is True
+    assert dados["gtin"] == "7896045102556"
+    assert dados["sabor"] == "Classic"
+    assert dados["produto"]["gtin"] == "7896045102556"
+
+
+def test_api_atrelar_gtin_invalido_retorna_400(cliente):
+    """POST /api/produto/{id}/atrelar-gtin com GTIN inválido retorna 400."""
+    con = cliente.app.state.con
+    p_id = con.execute(
+        "INSERT INTO produto (descricao_canonica) VALUES ('PROD SEM GTIN 2')"
+    ).lastrowid
+    con.commit()
+
+    r = cliente.post(
+        f"/api/produto/{p_id}/atrelar-gtin",
+        json={"gtin": "12345"},
+    )
+    assert r.status_code == 400
+
+
+
+
 
 

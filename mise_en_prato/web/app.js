@@ -200,39 +200,34 @@ function cartaoCupom(c, selo) {
 
   const itens = c.itens.map((i) => {
     let htmlVariante = '';
+    const comSabor = (i.variantes || []).filter((v) => v.sabor);
     if (i.sabor_adicional) {
       htmlVariante = `
-        <div style="display:flex;align-items:center;gap:.4rem;margin-top:.25rem;flex-wrap:wrap">
+        <div id="linha-sabor-${i.id}" class="linha-sabor-item">
           <span class="badge-sabor" title="${i.gtin_variante || ''}">🏷️ ${i.sabor_adicional}</span>
-          <button type="button" class="btn-link" style="font-size:.74rem;color:var(--fraca);background:none;border:none;cursor:pointer;padding:0"
-                  onclick="abrirModalAssociarSabor(${i.id}, '${c.chave}')">alterar</button>
-        </div>`;
-    } else if (i.variantes && i.variantes.length) {
-      const comSabor = i.variantes.filter((v) => v.sabor);
-      if (comSabor.length > 0) {
-        htmlVariante = `
-          <div class="chips-sabores-container">
-            <span class="fraca" style="font-size:.76rem">Sabor:</span>
-            ${comSabor.map((v) => `
-              <button type="button" class="chip-sabor"
-                      onclick="escolherSaborItem(${i.id}, '${v.gtin}', '${(v.sabor || '').replace(/'/g, "\\'")}', '${c.chave}')">${v.sabor}</button>
-            `).join('')}
-            <button type="button" class="chip-sabor outro"
-                    onclick="abrirModalAssociarSabor(${i.id}, '${c.chave}')">+ Outro / Bipar</button>
-          </div>`;
-      } else {
-        htmlVariante = `
-          <div style="margin-top:.25rem">
-            <button type="button" class="btn-escolher-sabor"
-                    onclick="abrirModalAssociarSabor(${i.id}, '${c.chave}')">+ Escolher Sabor / EAN</button>
-          </div>`;
-      }
+          <button type="button" class="btn-link-edit" title="Alterar sabor"
+                  onclick="abrirInlineSabor(${i.id}, '${c.chave}')">✎</button>
+        </div>
+        <div id="inline-sabor-${i.id}" style="display:none"></div>`;
+    } else if (comSabor.length > 0) {
+      htmlVariante = `
+        <div id="linha-sabor-${i.id}" class="linha-sabor-item">
+          <span class="fraca" style="font-size:.76rem">Sabor:</span>
+          ${comSabor.map((v) => `
+            <button type="button" class="chip-sabor"
+                    onclick="escolherSaborItem(${i.id}, '${v.gtin}', '${(v.sabor || '').replace(/'/g, "\\'")}', '${c.chave}')">${v.sabor}</button>
+          `).join('')}
+          <button type="button" class="chip-sabor outro"
+                  onclick="abrirInlineSabor(${i.id}, '${c.chave}')">+ Outro</button>
+        </div>
+        <div id="inline-sabor-${i.id}" style="display:none"></div>`;
     } else {
       htmlVariante = `
-        <div style="margin-top:.25rem">
+        <div id="linha-sabor-${i.id}" class="linha-sabor-item">
           <button type="button" class="btn-escolher-sabor"
-                  onclick="abrirModalAssociarSabor(${i.id}, '${c.chave}')">+ Escolher Sabor / EAN</button>
-        </div>`;
+                  onclick="abrirInlineSabor(${i.id}, '${c.chave}')">+ Sabor</button>
+        </div>
+        <div id="inline-sabor-${i.id}" style="display:none"></div>`;
     }
 
     return `
@@ -281,6 +276,100 @@ window.verCupom = async (chave) => {
   $('#cupom-lido').scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
 
+let _saboresCarregados = false;
+async function carregarDatalistSabores() {
+  try {
+    const { sabores } = await api('/api/sabores');
+    let dl = document.getElementById('lista-sabores-geral');
+    if (!dl) {
+      dl = document.createElement('datalist');
+      dl.id = 'lista-sabores-geral';
+      document.body.appendChild(dl);
+    }
+    dl.innerHTML = (sabores || []).map((s) => `<option value="${s}">`).join('');
+    _saboresCarregados = true;
+  } catch (_) {}
+}
+
+window.abrirInlineSabor = async (itemId, chave) => {
+  const container = document.getElementById(`inline-sabor-${itemId}`);
+  const linha = document.getElementById(`linha-sabor-${itemId}`);
+  if (!container) return;
+
+  if (!_saboresCarregados) {
+    carregarDatalistSabores();
+  }
+
+  const item = (window._itensCupomAtual || []).find((x) => x.id === itemId) || {};
+  const saborAtual = item.sabor_adicional || '';
+
+  if (linha) linha.style.display = 'none';
+  container.style.display = 'block';
+  container.innerHTML = `
+    <div class="mini-form-sabor">
+      <input type="text" id="input-sabor-inline-${itemId}" list="lista-sabores-geral"
+             placeholder="Ex: Morango, Baunilha..." value="${saborAtual}"
+             class="input-sabor-rapido" autofocus
+             onkeydown="if(event.key==='Enter'){event.preventDefault();salvarSaborRapido(${itemId}, '${chave}');}else if(event.key==='Escape'){fecharInlineSabor(${itemId});}">
+      <button type="button" class="btn-salvar-sabor" onclick="salvarSaborRapido(${itemId}, '${chave}')">Salvar</button>
+      <button type="button" class="btn-fechar-sabor" onclick="fecharInlineSabor(${itemId})">✕</button>
+      <div style="width:100%;margin-top:.15rem">
+        <a href="javascript:void(0)" class="link-bipar-avancado" onclick="abrirModalAssociarSabor(${itemId}, '${chave}')">
+          Opções com GTIN / Bipar código de barras ▾
+        </a>
+      </div>
+    </div>
+  `;
+  setTimeout(() => {
+    const inp = document.getElementById(`input-sabor-inline-${itemId}`);
+    if (inp) { inp.focus(); inp.select(); }
+  }, 50);
+};
+
+window.fecharInlineSabor = (itemId) => {
+  const container = document.getElementById(`inline-sabor-${itemId}`);
+  const linha = document.getElementById(`linha-sabor-${itemId}`);
+  if (container) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+  }
+  if (linha) linha.style.display = 'flex';
+};
+
+window.salvarSaborRapido = async (itemId, chave) => {
+  const input = document.getElementById(`input-sabor-inline-${itemId}`);
+  const sabor = (input?.value || '').trim();
+  if (!sabor) {
+    aviso('Digite o nome do sabor ou variante.', true);
+    return;
+  }
+  aviso('Salvando sabor…');
+  try {
+    await api(`/api/item/${itemId}/variante`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sabor, lembrar_loja: true, retroagir: false }),
+    });
+
+    const linha = document.getElementById(`linha-sabor-${itemId}`);
+    if (linha) {
+      linha.innerHTML = `
+        <span class="badge-sabor">🏷️ ${sabor}</span>
+        <button type="button" class="btn-link-edit" title="Alterar sabor"
+                onclick="abrirInlineSabor(${itemId}, '${chave}')">✎</button>
+      `;
+    }
+    const it = (window._itensCupomAtual || []).find((x) => x.id === itemId);
+    if (it) it.sabor_adicional = sabor;
+
+    fecharInlineSabor(itemId);
+    aviso(`Sabor "${sabor}" associado!`);
+    carregarDatalistSabores();
+  } catch (err) {
+    aviso(err.message, true);
+  }
+};
+
 window.escolherSaborItem = async (itemId, gtin, sabor, chave) => {
   try {
     aviso('Associando sabor…');
@@ -289,8 +378,20 @@ window.escolherSaborItem = async (itemId, gtin, sabor, chave) => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ gtin, sabor, lembrar_loja: true, retroagir: false }),
     });
+    const linha = document.getElementById(`linha-sabor-${itemId}`);
+    if (linha) {
+      linha.innerHTML = `
+        <span class="badge-sabor" title="${gtin || ''}">🏷️ ${sabor}</span>
+        <button type="button" class="btn-link-edit" title="Alterar sabor"
+                onclick="abrirInlineSabor(${itemId}, '${chave}')">✎</button>
+      `;
+    }
+    const it = (window._itensCupomAtual || []).find((x) => x.id === itemId);
+    if (it) {
+      it.sabor_adicional = sabor;
+      it.gtin_variante = gtin;
+    }
     aviso(`Sabor "${sabor}" associado!`);
-    await verCupom(chave);
   } catch (erro) {
     aviso(erro.message, true);
   }
@@ -807,26 +908,214 @@ $('#busca').oninput = () => {
 /* Sugestões de unificação. O botão que junta fica à direita e o "não são" à
    esquerda de propósito: juntar é a ação destrutiva, e não deve ser a que o
    polegar acerta sem querer. */
+function renderColunaProdutoUnificar(p, titulo, parId) {
+  const comprasTxt = p.linhas === 1 ? '1 compra' : `${p.linhas} compras`;
+  const faixaPreco = p.menor_preco
+    ? (p.menor_preco === p.maior_preco
+        ? dinheiro(p.menor_preco / 100)
+        : `${dinheiro(p.menor_preco / 100)} a ${dinheiro(p.maior_preco / 100)}`)
+    : '';
+  const gtinHtml = p.gtin
+    ? `<span class="selo" style="font-family:monospace;font-size:.76rem">${p.gtin}</span>`
+    : '<span class="fraca" style="font-size:.76rem">Sem código GTIN</span>';
+  const sufixoPainel = parId ? `${parId}-${p.id}` : `${p.id}`;
+  const btnBuscarMenorPreco = !p.gtin
+    ? `
+      <div style="margin-top:.3rem">
+        <button type="button" class="btn-secundario" style="padding:.2rem .45rem;font-size:.76rem;color:var(--destaque,#3b82f6)"
+                onclick="buscarCandidatosUnificacao(${p.id}, '${sufixoPainel}')">🔍 Buscar no Menor Preço</button>
+        <div id="painel-candidatos-col-${sufixoPainel}" style="display:none;margin-top:.4rem"></div>
+      </div>`
+    : '';
+  const saboresHtml = (p.sabores && p.sabores.length)
+    ? `
+    <div style="display:flex;gap:.25rem;flex-wrap:wrap;margin-top:.2rem">
+      ${p.sabores.map((s) => `<span class="badge-sabor" style="font-size:.72rem;padding:.1rem .35rem">🏷️ ${s}</span>`).join('')}
+    </div>`
+    : '';
+
+  return `
+    <div class="col-produto-unificar">
+      <div class="fraca" style="font-size:.74rem;font-weight:600;text-transform:uppercase">${titulo}</div>
+      <div class="col-produto-cabecalho">
+        ${p.foto_url ? `<img src="${p.foto_url}" class="col-produto-thumb" alt="${p.descricao}" loading="lazy">` : ''}
+        <div style="flex:1;min-width:0">
+          <strong style="display:block;font-size:.9rem;line-height:1.25">${p.descricao}</strong>
+          ${p.marca ? `<span class="fraca" style="font-size:.78rem">${p.marca}</span> · ` : ''}${gtinHtml}
+        </div>
+      </div>
+      <div class="fraca" style="font-size:.78rem;margin-top:.2rem">
+        📦 ${comprasTxt}${faixaPreco ? ` · ${faixaPreco}` : ''}
+      </div>
+      ${p.ultima_loja ? `<div class="fraca" style="font-size:.74rem">Última: ${p.ultima_loja} ${p.ultima_data ? `(${dia(p.ultima_data)})` : ''}</div>` : ''}
+      ${saboresHtml}
+      ${btnBuscarMenorPreco}
+    </div>
+  `;
+}
+
+window.buscarCandidatosUnificacao = async (produtoId, sufixoPainel) => {
+  const painelId = sufixoPainel ? `painel-candidatos-col-${sufixoPainel}` : `painel-candidatos-col-${produtoId}`;
+  const painel = document.getElementById(painelId);
+  if (!painel) return;
+  if (painel.style.display === 'block') {
+    painel.style.display = 'none';
+    painel.innerHTML = '';
+    return;
+  }
+  painel.style.display = 'block';
+  painel.innerHTML = '<div class="estado" style="font-size:.78rem">Consultando Menor Preço…</div>';
+
+  try {
+    const { candidatos } = await api(`/api/produto/${produtoId}/candidatos`);
+    if (!candidatos || !candidatos.length) {
+      painel.innerHTML = '<div class="fraca" style="font-size:.76rem">Nenhum candidato encontrado no Menor Preço.</div>';
+      return;
+    }
+    painel.innerHTML = `
+      <div style="background:var(--painel);border:1px solid var(--borda);border-radius:6px;padding:.5rem;max-height:16rem;overflow-y:auto">
+        <div class="fraca" style="font-size:.72rem;font-weight:600;margin-bottom:.3rem">Clique em 'Usar' para atrelar GTIN e loja:</div>
+        ${candidatos.map((c) => `
+          <div style="display:flex;align-items:center;gap:.4rem;padding:.35rem 0;border-bottom:1px solid var(--borda)">
+            ${c.foto_url ? `<img src="${c.foto_url}" style="width:32px;height:32px;object-fit:cover;border-radius:4px" loading="lazy">` : ''}
+            <div style="flex:1;min-width:0;font-size:.78rem">
+              <div style="font-weight:600;line-height:1.2">${c.descricao}</div>
+              <div class="fraca" style="font-family:monospace;font-size:.7rem">
+                ${c.gtin}${c.preco ? ` · ${dinheiro(c.preco)}` : ''}${c.sabor ? ` · <span class="badge-sabor" style="font-size:.68rem">🏷️ ${c.sabor}</span>` : ''}
+              </div>
+            </div>
+            <button type="button" class="acao" style="padding:.2rem .45rem;font-size:.74rem"
+                    onclick='atrelarGtinUnificacao(${produtoId}, ${JSON.stringify(c).replace(/'/g, "\\'")})'>
+              Usar
+            </button>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  } catch (err) {
+    painel.innerHTML = `<div class="estado ruim" style="font-size:.76rem">${err.message}</div>`;
+  }
+};
+
+window.atrelarGtinUnificacao = async (produtoId, c) => {
+  aviso('Atrelando GTIN ao produto e à loja…');
+  try {
+    await api(`/api/produto/${produtoId}/atrelar-gtin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        gtin: c.gtin,
+        nome: c.descricao,
+        sabor: c.sabor || undefined,
+        marca: c.loja || undefined,
+        foto_url: c.foto_url || undefined,
+      }),
+    });
+    aviso(`Código ${c.gtin} amarrado com sucesso!`);
+    desenharUnificacao();
+  } catch (err) {
+    aviso(err.message, true);
+  }
+};
+
 async function desenharUnificacao() {
   const { candidatos } = await api('/api/unificar');
-  $('#unificar').innerHTML = !candidatos.length ? '' : `
-    <h2>Parecem o mesmo produto</h2>
-    <div class="lista">${candidatos.map((c) => `
-      <div>
-        <div><strong>${c.manter.descricao}</strong></div>
-        <div><strong>${c.juntar.descricao}</strong></div>
-        <div class="fraca" style="margin:.3rem 0 .6rem">${c.motivo}</div>
-        <div style="display:flex;gap:.5rem;justify-content:space-between">
-          <button class="acao" style="background:transparent;color:var(--fraca);
-            border:1px solid var(--borda)"
-            onclick="recusarPar(${JSON.stringify(c.manter.descricao).replace(/"/g, '&quot;')},
-                                ${JSON.stringify(c.juntar.descricao).replace(/"/g, '&quot;')})">
-            não são</button>
-          <button class="acao" onclick="unirPar(${c.manter.id}, ${c.juntar.id})">
-            juntar em “${c.manter.descricao.slice(0, 22)}”</button>
-        </div>
-      </div>`).join('')}</div>`;
+  if (!candidatos || !candidatos.length) {
+    $('#unificar').innerHTML = '';
+    return;
+  }
+
+  $('#unificar').innerHTML = `
+    <h2>Parecem o mesmo produto (${candidatos.length})</h2>
+    <div class="fraca" style="margin-bottom:.8rem">
+      Compare as compras e códigos antes de decidir. Você pode fundir duplicatas idênticas de nota ou agrupar produtos da mesma linha como sabores distintos.
+    </div>
+    <div class="lista">
+      ${candidatos.map((c) => {
+        const idA = c.manter.id;
+        const idB = c.juntar.id;
+        return `
+          <div class="card-unificar-comparativo">
+            <div class="linha" style="margin-bottom:.4rem">
+              <span class="selo" style="background:rgba(59,130,246,0.15);color:var(--destaque,#3b82f6)">💡 ${c.motivo}</span>
+            </div>
+            <div class="comparativo-colunas">
+              ${renderColunaProdutoUnificar(c.manter, 'Produto A (Mais histórico)', `${idA}-${idB}`)}
+              ${renderColunaProdutoUnificar(c.juntar, 'Produto B (Secundário)', `${idA}-${idB}`)}
+            </div>
+
+            <div id="painel-agrupar-${idA}-${idB}" class="painel-agrupar-inline" style="display:none">
+              <div style="font-weight:600;font-size:.85rem;margin-bottom:.4rem">Agrupar como Sabores da Linha "${c.manter.descricao}":</div>
+              <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.5rem">
+                <div style="flex:1;min-width:10rem">
+                  <label class="fraca" style="font-size:.76rem;display:block">Sabor de A (opcional):</label>
+                  <input type="text" id="input-sabor-mestre-${idA}-${idB}" placeholder="Ex: Tradicional" style="width:100%;padding:.3rem .5rem">
+                </div>
+                <div style="flex:1;min-width:10rem">
+                  <label class="fraca" style="font-size:.76rem;display:block">Sabor de B:</label>
+                  <input type="text" id="input-sabor-var-${idA}-${idB}" placeholder="Ex: Morango, Chocolate..." style="width:100%;padding:.3rem .5rem">
+                </div>
+              </div>
+              <div style="display:flex;gap:.4rem">
+                <button type="button" class="acao" onclick="confirmarAgruparComoLinha(${idA}, ${idB})">Confirmar Linha Multissabor</button>
+                <button type="button" class="btn-secundario" onclick="document.getElementById('painel-agrupar-${idA}-${idB}').style.display='none'">Cancelar</button>
+              </div>
+            </div>
+
+            <div class="acoes-unificacao">
+              <button class="acao" style="background:transparent;color:var(--fraca);border:1px solid var(--borda)"
+                      onclick="recusarPar(${JSON.stringify(c.manter.descricao).replace(/"/g, '&quot;')},
+                                          ${JSON.stringify(c.juntar.descricao).replace(/"/g, '&quot;')})"
+                      title="Dispensar sugestão">
+                ✕ Não têm relação
+              </button>
+              <div style="flex:1"></div>
+              <button class="btn-secundario" style="color:var(--destaque,#3b82f6);border-color:var(--destaque,#3b82f6)"
+                      onclick="abrirPainelAgrupar(${idA}, ${idB})">
+                🏷️ Agrupar como Sabores
+              </button>
+              <button class="acao" onclick="unirPar(${idA}, ${idB})">
+                🔗 Fundir Duplicata
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
 }
+
+window.abrirPainelAgrupar = (idA, idB) => {
+  const painel = document.getElementById(`painel-agrupar-${idA}-${idB}`);
+  if (!painel) return;
+  painel.style.display = painel.style.display === 'none' ? 'block' : 'none';
+  if (painel.style.display === 'block') {
+    const inp = document.getElementById(`input-sabor-var-${idA}-${idB}`);
+    if (inp) inp.focus();
+  }
+};
+
+window.confirmarAgruparComoLinha = async (idA, idB) => {
+  const sMestre = (document.getElementById(`input-sabor-mestre-${idA}-${idB}`)?.value || '').trim();
+  const sVar = (document.getElementById(`input-sabor-var-${idA}-${idB}`)?.value || '').trim();
+  aviso('Agrupando produtos em linha multissabor…');
+  try {
+    await api('/api/unificar/como-linha', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mestre_id: idA,
+        variante_id: idB,
+        sabor_mestre: sMestre || undefined,
+        sabor_variante: sVar || undefined,
+      }),
+    });
+    aviso('Produtos agrupados com sucesso!');
+    carregadores.produtos();
+  } catch (err) {
+    aviso(err.message, true);
+  }
+};
 
 window.unirPar = async (manter, juntar) => {
   await api('/api/unificar', {
@@ -857,13 +1146,13 @@ async function desenharEnriquecimento() {
       <div class="fraca" style="margin:.3rem 0 .6rem">
         Sem código de barras, itens iguais com escritas diferentes na nota não se reconhecem.
         ${statusCat.disponivel
-          ? `O catálogo satélite local tem ${statusCat.total} produtos prontos para casamento offline instantâneo.`
-          : 'Dumps do Open Food Facts e CMED podem resolver os itens offline.'}
+          ? `O catálogo satélite local tem ${statusCat.total} produtos em cache com fotos e dados nutricionais.`
+          : 'Consulte o Menor Preço sob demanda para identificar os códigos de barras.'}
       </div>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap">
         ${statusCat.disponivel ? `
           <button class="acao" onclick="enriquecerPeloCatalogoLocal()">
-            Resolver offline no Catálogo (${statusCat.total})
+            Sincronizar dados do Catálogo Local (${statusCat.total})
           </button>` : ''}
         <button class="${statusCat.disponivel ? 'btn-secundario' : 'acao'}" onclick="descobrirCodigos()">
           Consultar Menor Preço (5 por vez)

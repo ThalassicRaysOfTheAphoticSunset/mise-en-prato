@@ -312,22 +312,23 @@ def enriquecer_pendentes_local(
     con_catalogo: sqlite3.Connection | None = None,
     limite: int = 100,
 ) -> dict:
-    """Percorre produtos com GTIN sem metadados e produtos sem GTIN, enriquecendo via catálogo."""
+    """Sincroniza metadados (fotos, nutrição, marca) de produtos via catálogo satélite."""
     cat = con_catalogo if con_catalogo is not None else conectar_catalogo(criar=True)
     relatorio = {"identificados": [], "sem_certeza": [], "metadados_atualizados": 0}
 
-    # 1. Atualiza produtos que já têm GTIN mas faltam marca/nutriscore/nova
+    # Atualiza produtos que já têm GTIN sincronizando marca/nutriscore/nova/fotos do cache local
     if cat:
         sync = sincronizar_gtins_existentes(con, cat, limite=limite)
         relatorio["metadados_atualizados"] = sync.get("atualizados", 0)
 
-    # 2. Tenta resolver itens pendentes sem GTIN
-    for pendente in pendentes(con, limite):
-        r = enriquecer_local(con, pendente["produto_id"], cat)
-        alvo = "identificados" if r["novo"] else "sem_certeza"
-        relatorio[alvo].append(
-            {"descricao": r["descricao"], "gtin": r.get("gtin"), "motivo": r["motivo"]}
-        )
+        # Tenta resolver itens pendentes que tenham correspondência exata no catálogo
+        for pendente in pendentes(con, limite):
+            r = enriquecer_local(con, pendente["produto_id"], cat)
+            if r["novo"] and r.get("gtin"):
+                relatorio["identificados"].append(
+                    {"descricao": r["descricao"], "gtin": r.get("gtin"), "motivo": r["motivo"]}
+                )
+
     relatorio["restantes"] = len(pendentes(con, 999))
     return relatorio
 

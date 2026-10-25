@@ -12,7 +12,13 @@ import pytest
 from mise_en_prato.banco import conectar
 from mise_en_prato.cupons import gravar
 from mise_en_prato.nfce_pr import interpretar
-from mise_en_prato.unificacao import candidatos, parecidos, recusar, unificar
+from mise_en_prato.unificacao import (
+    candidatos,
+    parecidos,
+    recusar,
+    unificar,
+    unificar_como_linha,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cupom_lar_2026-08-14.html"
 
@@ -127,3 +133,105 @@ def test_unificar_consigo_mesmo_e_erro(con):
     algum = con.execute("SELECT id FROM produto LIMIT 1").fetchone()[0]
     with pytest.raises(ValueError, match="ele mesmo"):
         unificar(con, algum, algum)
+
+
+# ── unificar como linha multissabor ───────────────────────────────────────────
+def test_candidatos_retorna_contexto_comparativo_completo(con):
+    con.execute(
+        """INSERT INTO produto (descricao_canonica, gtin, marca)
+           VALUES ('LEITE FRIMESA INTEGRAL 1LT', '7891234567890', 'Frimesa')"""
+    )
+    con.commit()
+    achados = candidatos(con)
+    par = next(c for c in achados if "LEITE FRIMESA" in c["manter"]["descricao"])
+
+    for lado in ("manter", "juntar"):
+        assert "id" in par[lado]
+        assert "descricao" in par[lado]
+        assert "linhas" in par[lado]
+        assert "gasto" in par[lado]
+        assert "sabores" in par[lado]
+        assert "menor_preco" in par[lado]
+        assert "maior_preco" in par[lado]
+        assert "ultima_data" in par[lado]
+        assert "ultima_loja" in par[lado]
+
+
+def test_unificar_como_linha_converte_produto_em_variante_e_migra_itens(con):
+    mestre = con.execute(
+        """INSERT INTO produto (descricao_canonica, gtin, marca)
+           VALUES ('IOGURTE GREGO 90G', '7890001', 'Nestle')"""
+    ).lastrowid
+    outro = con.execute(
+        """INSERT INTO produto (descricao_canonica, gtin, marca)
+           VALUES ('IOGURTE GREGO MORANGO 90G', '7890002', 'Nestle')"""
+    ).lastrowid
+
+    # Cria compras para ambos
+    sql_item = """
+        INSERT INTO item (chave, seq, descricao, quantidade_milesimos,
+                          unitario_centavos, total_centavos, produto_id, codigo_loja)
+        SELECT chave, ?, ?, 1000, 450, 450, ?, ? FROM cupom LIMIT 1
+    """
+    con.execute(sql_item, (101, 'IOG GREGO TRAD', mestre, 'COD_TRAD'))
+    con.execute(sql_item, (102, 'IOG GREGO MORANGO', outro, 'COD_MORANGO'))
+    con.commit()
+
+    res = unificar_como_linha(
+        con, mestre, outro, sabor_mestre="Tradicional", sabor_variante="Morango"
+    )
+    assert res["mestre_id"] == mestre
+    assert res["variante_id"] == outro
+    assert res["sabor"] == "Morango"
+
+    # O produto outro foi removido da tabela produto
+    assert con.execute("SELECT 1 FROM produto WHERE id = ?", (outro,)).fetchone() is None
+
+    # Foram criadas variantes sob o mestre
+    vars_mestre = con.execute(
+        "SELECT gtin, sabor FROM produto_variante WHERE produto_id = ? ORDER BY sabor",
+        (mestre,),
+    ).fetchall()
+    sabores_map = {r["sabor"]: r["gtin"] for r in vars_mestre}
+    assert "Morango" in sabores_map
+    assert sabores_map["Morango"] == "7890002"
+    assert "Tradicional" in sabores_map
+
+    # Itens do produto absorvido agora pertencem ao mestre e têm sabor 'Morango'
+    sql_outro = (
+        "SELECT produto_id, sabor_adicional, gtin_variante "
+        "FROM item WHERE codigo_loja = 'COD_MORANGO'"
+    )
+    item_outro = con.execute(sql_outro).fetchone()
+    assert item_outro["produto_id"] == mestre
+    assert item_outro["sabor_adicional"] == "Morango"
+    assert item_outro["gtin_variante"] == "7890002"
+
+    # Itens do mestre ganharam o sabor mestre
+    item_mestre = con.execute(
+        "SELECT produto_id, sabor_adicional FROM item WHERE codigo_loja = 'COD_TRAD'"
+    ).fetchone()
+    assert item_mestre["sabor_adicional"] == "Tradicional"
+
+
+def test_unificar_como_linha_sem_gtin_preserva_integridade(con):
+    mestre = con.execute(
+        "INSERT INTO produto (descricao_canonica) VALUES ('BEBIDA LACTEA CHOCOLATE 200ML')"
+    ).lastrowid
+    outro = con.execute(
+        "INSERT INTO produto (descricao_canonica) VALUES ('BEBIDA LACTEA MORANGO 200ML')"
+    ).lastrowid
+
+    unificar_como_linha(con, mestre, outro, sabor_variante="Morango")
+
+    vars_mestre = con.execute(
+        "SELECT gtin, sabor FROM produto_variante WHERE produto_id = ?",
+        (mestre,),
+    ).fetchall()
+    assert any(r["sabor"] == "Morango" and r["gtin"].startswith("sabor:") for r in vars_mestre)
+
+
+def test_unificar_como_linha_consigo_mesmo_e_erro(con):
+    mestre = con.execute("SELECT id FROM produto LIMIT 1").fetchone()[0]
+    with pytest.raises(ValueError, match="ele mesmo"):
+        unificar_como_linha(con, mestre, mestre)

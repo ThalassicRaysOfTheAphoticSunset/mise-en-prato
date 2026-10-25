@@ -858,6 +858,151 @@ svg.grafico-historico {
   background: rgba(59, 130, 246, 0.08);
 }
 
+/* ── mini-form e botões de sabor inline no cupom ── */
+.linha-sabor-item {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  margin-top: .3rem;
+  flex-wrap: wrap;
+}
+
+.btn-link-edit {
+  background: none;
+  border: none;
+  color: var(--fraca, #8e959b);
+  cursor: pointer;
+  padding: .1rem .3rem;
+  font-size: .82rem;
+  line-height: 1;
+  border-radius: 4px;
+}
+.btn-link-edit:hover {
+  color: var(--tinta, #e0e0e0);
+  background: var(--realce, #26292b);
+}
+
+.mini-form-sabor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+  align-items: center;
+  margin-top: .35rem;
+  padding: .35rem .5rem;
+  background: var(--painel, #1e2022);
+  border: 1px solid var(--borda, #373b3e);
+  border-radius: 6px;
+}
+
+.input-sabor-rapido {
+  flex: 1;
+  min-width: 9rem;
+  padding: .25rem .5rem;
+  font-size: .82rem;
+  border: 1px solid var(--borda, #373b3e);
+  border-radius: 4px;
+  background: var(--fundo, #121314);
+  color: var(--tinta, #e0e0e0);
+}
+
+.btn-salvar-sabor {
+  background: var(--verde, #22c55e);
+  color: #06110a;
+  border: none;
+  padding: .25rem .6rem;
+  border-radius: 4px;
+  font-size: .78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-salvar-sabor:hover {
+  filter: brightness(1.1);
+}
+
+.btn-fechar-sabor {
+  background: transparent;
+  border: none;
+  color: var(--fraca, #8e959b);
+  font-size: .9rem;
+  cursor: pointer;
+  padding: .2rem .4rem;
+}
+
+.link-bipar-avancado {
+  font-size: .74rem;
+  color: var(--destaque, #3b82f6);
+  text-decoration: none;
+  cursor: pointer;
+}
+.link-bipar-avancado:hover {
+  text-decoration: underline;
+}
+
+/* ── Comparativo Rico de Unificação ("Parecem o mesmo produto") ── */
+.card-unificar-comparativo {
+  background: var(--painel, #1e2022);
+  border: 1px solid var(--borda, #373b3e);
+  border-radius: 8px;
+  padding: .85rem;
+  margin-bottom: 1rem;
+}
+
+.comparativo-colunas {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .8rem;
+  margin: .6rem 0;
+}
+
+@media (max-width: 600px) {
+  .comparativo-colunas {
+    grid-template-columns: 1fr;
+  }
+}
+
+.col-produto-unificar {
+  background: var(--fundo, #121314);
+  border: 1px solid var(--borda, #373b3e);
+  border-radius: 6px;
+  padding: .65rem;
+  display: flex;
+  flex-direction: column;
+  gap: .3rem;
+}
+
+.col-produto-cabecalho {
+  display: flex;
+  gap: .5rem;
+  align-items: flex-start;
+}
+
+.col-produto-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--borda, #373b3e);
+  background: #fff;
+}
+
+.acoes-unificacao {
+  display: flex;
+  gap: .5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: .6rem;
+  padding-top: .6rem;
+  border-top: 1px solid var(--borda, #373b3e);
+}
+
+.painel-agrupar-inline {
+  background: var(--fundo, #121314);
+  border: 1px dashed var(--destaque, #3b82f6);
+  border-radius: 6px;
+  padding: .6rem;
+  margin-top: .6rem;
+}
+
 /* ── Módulo de Receitas e Modo Cozinha ─────────────────────────────────────── */
 .grade-receitas {
   display: grid;
